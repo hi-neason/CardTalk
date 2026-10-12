@@ -1,7 +1,7 @@
 import { SCENES, type Room, type Expansion, type Emotion } from '../domain';
 import { newId, readIdentity, saveIdentity } from './storage';
 
-export interface Trial { token: string; remaining: number; limit: number; resetAt: string; capabilities: { profileManagement: boolean; scenarioManagement: boolean; analytics: boolean } }
+export interface Trial { token: string; remaining: number; limit: number; resetAt: string; capabilities: { profileManagement: boolean; scenarioManagement: boolean; analytics: boolean; customCards?: boolean } }
 export interface Health { status: string; llmConfigured: boolean; ttsConfigured: boolean; ttsEmotionSupported?: boolean; promptVersion: string }
 export class ApiError extends Error {
   constructor(public code: string, message: string, public status: number) { super(message); }
@@ -55,12 +55,15 @@ export async function trial(): Promise<Trial> {
   })();
   try { return await pendingIdentity; } finally { pendingIdentity = null; }
 }
-export function expand(room: Room, requestId = newId(), emotion?: Emotion) {
-  const scene = SCENES.find(item => item.id === room.context.sceneId);
+export function expand(room: Room, requestId = newId(), emotion?: Emotion, capabilities?: { profileManagement: boolean; scenarioManagement: boolean }) {
+  const builtinScene = SCENES.find(item => item.id === room.context.sceneId);
+  const scene = room.context.sceneSnapshot || builtinScene;
+  const sceneAllowed = !!scene && scene.id !== 'none' && (!scene.id.startsWith('custom-scene-') || capabilities?.scenarioManagement === true);
+  const profile = capabilities?.profileManagement ? room.context.profileSnapshot : undefined;
   return request<Expansion>('/expansions', 'POST', {
     requestId, inputVersion: room.draft.version, roomId: room.id,
     cards: room.draft.cards.map(({ id, label, description }) => ({ id, label, ...(description ? { description } : {}) })),
-    context: { preset: room.context.preset, scene: scene && scene.id !== 'none' ? { id: scene.id, name: scene.name, description: scene.description } : null, participants: room.context.participants, ...(emotion ? { emotion } : {}) },
+    context: { preset: room.context.preset, scene: sceneAllowed && scene ? { id: scene.id, name: scene.name, description: scene.description } : null, ...(profile ? { profile: { name: profile.name, age: profile.age, language: profile.language, interests: profile.interests, personality: profile.personality, communicationStyle: profile.communicationStyle, currentState: profile.currentState } } : {}), participants: room.context.participants, ...(emotion ? { emotion } : {}) },
   }, identity.token);
 }
 export function remoteSpeech(text: string, rate: number, emotion?: Emotion) {

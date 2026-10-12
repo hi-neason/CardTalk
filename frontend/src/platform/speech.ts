@@ -1,4 +1,5 @@
 import type { Card, Emotion, PlaybackStatus } from '../domain';
+import { CARDS, CORE_CARDS } from '../domain';
 import { remoteSpeech } from './api';
 
 type Update = (status: PlaybackStatus, message?: string) => void;
@@ -6,7 +7,18 @@ let stopCurrent: (() => void) | null = null;
 let sequence = 0;
 export function stopSpeech() { sequence++; const stop = stopCurrent; stopCurrent = null; stop?.(); }
 
-export function playCardAudio(cards: Card[], update: Update) {
+export function playCardAudio(cards: Card[], update: Update, rate = 0.9) {
+  if (cards.some(card => ![...CARDS, ...CORE_CARDS].some(builtin => builtin.id === card.id))) {
+    // #ifdef H5
+    void speakText(cards.map(card => card.label).join(' '), rate, update, false);
+    return;
+    // #endif
+    // #ifndef H5
+    stopSpeech();
+    update('unavailable', '自定义卡片没有预置声音，可展示原始文字，或启用讯飞合成后播放。');
+    return;
+    // #endif
+  }
   stopSpeech();
   const current = ++sequence;
   const audio = uni.createInnerAudioContext();

@@ -20,6 +20,9 @@ Default listener is `127.0.0.1:8080` (`CARDTALK_BIND_ADDRESS` / `PORT`). The fro
 | `CARDTALK_LLM_API_KEY` | empty; required to enable real expansion |
 | `CARDTALK_LLM_TIMEOUT_SECONDS` | `30` |
 | `CARDTALK_DAILY_LIMIT` | `20`, resets midnight Asia/Shanghai |
+| `CARDTALK_PROFILE_MANAGEMENT_ENABLED` | `false`; local development profile-context switch |
+| `CARDTALK_SCENARIO_MANAGEMENT_ENABLED` | `false`; local development custom-scene switch |
+| `CARDTALK_CUSTOM_CARDS_ENABLED` | `true`; independent local custom-card switch, pricing undecided |
 | `CARDTALK_DATA_FILE` | `./data/trial-metadata.json` relative to launch directory |
 | `CARDTALK_XFYUN_APP_ID` / `CARDTALK_XFYUN_API_KEY` / `CARDTALK_XFYUN_API_SECRET` | empty; server-only credentials for the selected Xfyun product |
 | `CARDTALK_XFYUN_ENGINE` | `super-smart`; optional `voice-clone` consumes an existing authorized multi-style resource |
@@ -51,7 +54,7 @@ All routes are under `/api/v1`. JSON errors use `{ "code": "…", "message": "�
 ### GET `/health`
 
 ```json
-{"status":"ok","llmConfigured":false,"ttsConfigured":false,"ttsEmotionSupported":false,"ttsEngine":"super-smart","promptVersion":"aac-2026-10-12-v2"}
+{"status":"ok","llmConfigured":false,"ttsConfigured":false,"ttsEmotionSupported":false,"ttsEngine":"super-smart","promptVersion":"aac-2026-10-12-v3"}
 ```
 
 ### POST `/trial-session`
@@ -59,7 +62,7 @@ All routes are under `/api/v1`. JSON errors use `{ "code": "…", "message": "�
 Body `{ "clientId": "random-installation-identifier" }`. Client ID matches `[A-Za-z0-9_-]{8,128}`. Use a high-entropy installation ID generated once and retained on device. This is an anonymous demo identity, not a verified user or production anti-abuse mechanism.
 
 ```json
-{"token":"opaque-bearer-token","remaining":20,"limit":20,"resetAt":"2026-10-12T16:00:00Z","capabilities":{"profileManagement":false,"scenarioManagement":false,"analytics":false}}
+{"token":"opaque-bearer-token","remaining":20,"limit":20,"resetAt":"2026-10-12T16:00:00Z","capabilities":{"profileManagement":false,"scenarioManagement":false,"customCards":true,"analytics":false}}
 ```
 
 Creating a session with the same client ID rotates its token and invalidates the old token, but preserves usage and completed-request metadata. On normal app startup, first read the saved token through GET instead of repeatedly rotating it.
@@ -67,6 +70,20 @@ Creating a session with the same client ID rotates its token and invalidates the
 ### GET `/trial-session`
 
 `Authorization: Bearer <token>`. Same response contract. Unknown/missing tokens return 401 `UNAUTHORIZED`.
+
+### Independent local capabilities
+
+Both trial-session routes return `profileManagement`, `scenarioManagement`, `customCards`, and `analytics`. The first three follow independent backend startup environment flags; analytics remains false. Restart after changing flags and GET the existing trial session to refresh capabilities. Existing tokens, quota counts and completed-request metadata remain intact.
+
+These flags apply to the local development process, **not** a paid purchase, per-family license or verified identity. No cloud profile/card/scenario CRUD or storage is introduced. All family data is still on the client; only the necessary request snapshot is transiently sent to the selected model service.
+
+When processing expansions, after identity verification and before model invocation or charging:
+
+- Non-null `context.profile` requires `profileManagement`; otherwise 403 `FEATURE_DISABLED`.
+- A scene ID starting `custom-scene-` requires `scenarioManagement`; otherwise 403 `FEATURE_DISABLED`.
+- Any card ID starting `custom-` requires `customCards`; otherwise 403 `FEATURE_DISABLED`.
+
+The ID prefixes are an agreed local test contract, not proof of data origin or production authorization. Built-in scenes/cards and `core-` cards continue to work. These backend gates do not disable raw local playback or history. When enabled, supplied snapshots are bounded by DTO validation and used as data, without querying a cloud profile database.
 
 ### POST `/expansions`
 
@@ -82,12 +99,12 @@ Bearer required. Body:
     "preset":"children",
     "scene":{"id":"kitchen","name":"厨房","description":"家里准备吃饭"},
     "participants":[{"id":"mom","name":"妈妈"}],
-    "profile":{"name":"小明","age":8,"interests":"水果","communicationStyle":"短句","currentState":""}
+    "profile":{"name":"小明","age":8,"language":"普通话","interests":"水果","personality":"慢热","communicationStyle":"短句","currentState":""}
   }
 }
 ```
 
-`preset`: children/adult. `scene` and `profile` may be null/omitted. `participants` is required (empty is valid, max 20). `profile.interests`, `communicationStyle`, and `currentState` are strings. `context.emotion` is optional: `neutral|happy|sad|angry|fearful`. Omitted/null means no extra emotion styling. Non-neutral styling must correspond to selected built-in card IDs (`happy/sad/angry/afraid`); absent or mismatched cards return 400 `INVALID_EMOTION_CONTEXT`. Multiple different selected emotion IDs or a selected negation/refusal card (`not/no/core-no/core-refuse`) neutralize added styling without flipping it to an opposite emotion. No emotion is inferred from profile, age, scene or generated text. Original card meaning (including emotions and refusal) is retained even when styling is disabled. Cards are ordered, repeated cards are valid, and input requires 1–20 cards. Card `personId` is optional. See `Contracts.java` for all length limits.
+`preset`: children/adult. `scene` and `profile` may be null/omitted. `participants` is required (empty is valid, max 20). `profile` accepts `name` (100 chars), `age` (0–130), `language` (80), `interests` (500), `personality` (500), `communicationStyle` (500) and `currentState` (500), all optional. The profile-containing example requires its development capability to be enabled. `currentState` is a separately entered current-context field, never inferred from family observations/interests/personality. These background fields are data, cannot override selected cards, and cannot establish the user's present intention. `context.emotion` is optional: `neutral|happy|sad|angry|fearful`. Omitted/null means no extra emotion styling. Non-neutral styling must correspond to selected built-in card IDs (`happy/sad/angry/afraid`); absent or mismatched cards return 400 `INVALID_EMOTION_CONTEXT`. Multiple different selected emotion IDs or a selected negation/refusal card (`not/no/core-no/core-refuse`, or an exact trimmed label `不/不是/不要`, including custom cards) neutralize added styling without flipping it to an opposite emotion. No emotion is inferred from profile, age, scene or generated text. Original card meaning (including emotions and refusal) is retained even when styling is disabled. Cards are ordered, repeated cards are valid, and input requires 1–20 cards. Card `personId` is optional. Card description accepts up to 500 characters. Scene name accepts 100 and its composed snapshot description accepts 2200, covering the saved description, activities and objects. See `Contracts.java` for all length limits.
 
 ```json
 {
@@ -96,7 +113,7 @@ Bearer required. Body:
   "candidates":[{"id":"candidate-1","text":"我想吃苹果。","sourceCardIds":["i","apple"]}],
   "needsClarification":false,
   "clarification":"",
-  "promptVersion":"aac-2026-10-12-v2",
+  "promptVersion":"aac-2026-10-12-v3",
   "remaining":19
 }
 ```
@@ -119,7 +136,9 @@ Concurrent retries of one identity are serialized. Only a valid successfully per
 
 ## POST `/speech`
 
-Bearer required. Body `{ "requestId":"speech-uuid", "text":"确认后的表达", "rate":1.0, "emotion":"neutral" }`. `text` is required, max 250 characters; optional rate range 0.5–2.0. Optional emotion enum is the same as expansion. Omit/null when emotion styling is disabled; no/conflicting emotion cards resolve to neutral in the client. The speech endpoint consumes already-confirmed text and does not re-infer emotion or alter its wording.
+Bearer required. Body `{ "requestId":"speech-uuid", "text":"确认后的表达", "rate":1.0, "emotion":"neutral" }`. `text` is required, max 1100 UTF-16 code units; optional rate range 0.5–2.0. Optional emotion enum is the same as expansion. Omit/null when emotion styling is disabled; no/conflicting emotion cards resolve to neutral in the client. The speech endpoint consumes already-confirmed text and does not re-infer emotion or alter its wording.
+
+The limit accommodates a confirmed raw expression containing 20 custom-card labels of 50 characters plus 19 separating spaces (1019 characters). Text is forwarded unchanged. Xfyun documents a 64 KB total input text limit for super-smart and an 8000-byte limit **after Base64 encoding** for voice-clone. Even conservatively allowing 4 UTF-8 bytes per code unit, 1100 units encode to at most 5868 Base64 bytes, below both provider limits.
 
 Successful response is `audio/mpeg`, binary, `Cache-Control: no-store`. It accepts no client-supplied upstream URL or voice resource. The client controls playback. Xfyun receives a single complete Base64 UTF-8 text message (`status=2`) and returns audio chunks over authenticated WebSocket. The backend assembles ordered `lame`/24 kHz chunks with a 5 MB total limit and rejects incomplete/invalid streams. It does not persist audio or text.
 

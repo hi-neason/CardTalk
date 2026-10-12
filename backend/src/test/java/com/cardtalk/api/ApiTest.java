@@ -41,7 +41,7 @@ class ApiTest {
         });
         upstream.start();
         gateway=new ModelGateway(mapper,"http://127.0.0.1:"+upstream.getAddress().getPort()+"/v1","test-model","test-key",1);
-        trials=new TrialService(mapper,gateway,directory.resolve("state.json").toString(),2);
+        trials=new TrialService(mapper,gateway,directory.resolve("state.json").toString(),2,true,false,true);
         var validator=new LocalValidatorFactoryBean(); validator.afterPropertiesSet();
         mvc=MockMvcBuilders.standaloneSetup(new ApiController(trials,gateway,new SpeechGateway(mapper,"","","","","",1,"super-smart",""))).setControllerAdvice(new Errors()).setValidator(validator).build();
     }
@@ -49,7 +49,7 @@ class ApiTest {
     ExpansionRequest request(String id,int size) {
         var cards=new ArrayList<Card>();
         for(int i=0;i<size;i++) cards.add(new Card("apple","苹果","水果",null));
-        return new ExpansionRequest(id,1L,"private-room",cards,new Context("children",new Scene("kitchen","厨房","吃饭"),List.of(new Participant("mom","妈妈")),new Profile("私密姓名",8,"苹果","短句","累"),null));
+        return new ExpansionRequest(id,1L,"private-room",cards,new Context("children",new Scene("kitchen","厨房","吃饭"),List.of(new Participant("mom","妈妈")),new Profile("私密姓名",8,"苹果","短句","累",null,null),null));
     }
     String token() { return trials.create("test-client-123").token(); }
     @Test void validTwentyCardsKeepOrderAndRequireConfirmation() throws Exception {
@@ -77,7 +77,7 @@ class ApiTest {
         assertEquals(1,trials.expand(token,original).remaining());
         assertEquals(1,calls.get());
         assertEquals("REQUEST_ID_CONFLICT",assertThrows(ApiException.class,()->trials.expand(token,request("r1",2))).code);
-        var restarted=new TrialService(mapper,gateway,directory.resolve("state.json").toString(),2);
+        var restarted=new TrialService(mapper,gateway,directory.resolve("state.json").toString(),2,true,false,true);
         assertEquals(1,restarted.session(token).remaining());
         assertEquals("REQUEST_ALREADY_COMPLETED",assertThrows(ApiException.class,()->restarted.expand(token,original)).code);
         assertEquals(0,restarted.expand(token,request("r2",1)).remaining());
@@ -127,8 +127,32 @@ class ApiTest {
             .content("{\"requestId\":\"s1\",\"text\":\"你好\"}"))
             .andExpect(status().isServiceUnavailable()).andExpect(jsonPath("$.code").value("TTS_NOT_CONFIGURED"));
         mvc.perform(post("/api/v1/speech").header("Authorization","Bearer "+token).contentType("application/json")
-            .content(mapper.writeValueAsString(Map.of("requestId","s1","text","a".repeat(251)))))
+            .content(mapper.writeValueAsString(Map.of("requestId","s1","text","a".repeat(1101)))))
             .andExpect(status().isBadRequest());
+    }
+    @Test void twentyMaximumLabelsReachSpeechWebSocketUnchanged() throws Exception {
+        String text=String.join(" ",Collections.nCopies(20,"卡".repeat(50)));
+        assertEquals(1019,text.length());
+        byte[] audio={73,68,51};
+        String response=mapper.writeValueAsString(Map.of("header",Map.of("code",0,"status",2),
+            "payload",Map.of("audio",Map.of("encoding","lame","status",2,"seq",1,
+                "audio",Base64.getEncoder().encodeToString(audio)))));
+        try(var server=new SpeechGatewayTest.FakeSocket(peer->peer.send(response,true,1))) {
+            var speech=new SpeechGateway(mapper,"ws://127.0.0.1:"+server.server.getLocalPort()+"/v1/private/test",
+                "app","key","secret","x6_lingxiaoxuan_pro",2,"super-smart","");
+            var validator=new LocalValidatorFactoryBean(); validator.afterPropertiesSet();
+            var speechMvc=MockMvcBuilders.standaloneSetup(new ApiController(trials,gateway,speech))
+                .setControllerAdvice(new Errors()).setValidator(validator).build();
+            speechMvc.perform(post("/api/v1/speech").header("Authorization","Bearer "+token()).contentType("application/json")
+                .content(mapper.writeValueAsString(Map.of("requestId","long-expression","text",text))))
+                .andExpect(status().isOk()).andExpect(content().contentType("audio/mpeg"))
+                .andExpect(content().bytes(audio));
+            var payload=mapper.readTree(server.request.get(2,TimeUnit.SECONDS));
+            String encoded=payload.at("/payload/text/text").asText();
+            assertEquals(text,new String(Base64.getDecoder().decode(encoded),StandardCharsets.UTF_8));
+            assertTrue(encoded.length()<8000);
+            assertTrue(server.target.get().contains("authorization="));
+        }
     }
     @Test void threeCandidatesAcceptedAndBlankRejected() {
         String token=token();
@@ -161,6 +185,17 @@ class ApiTest {
         assertEquals("neutral",userJson.at("/context/emotion").asText());
         assertEquals("不",userJson.at("/cards/0/label").asText());
     }
+    @Test void customNegationLabelNeutralizesStylingWithoutInferringOtherEmotions() throws Exception {
+        String token=token();
+        var input=new ExpansionRequest("custom-negation",1L,"room",List.of(new Card("custom-no"," 不要 ",null,null),new Card("happy","开心",null,null)),new Context("adult",null,List.of(),null,"happy"));
+        trials.expand(token,input);
+        var userJson=mapper.readTree(mapper.readTree(sent.get()).path("messages").path(1).path("content").asText());
+        assertEquals("neutral",userJson.at("/context/emotion").asText());
+        assertEquals(" 不要 ",userJson.at("/cards/0/label").asText());
+        var customHappy=new ExpansionRequest("custom-happy",1L,"room",List.of(new Card("custom-feeling","开心",null,null)),new Context("adult",null,List.of(),null,"happy"));
+        assertEquals("INVALID_EMOTION_CONTEXT",assertThrows(ApiException.class,()->trials.expand(token,customHappy)).code);
+        assertEquals(1,calls.get());
+    }
     @Test void emotionOffKeepsExplicitCardMeaningAndCancelRequiresIdentity() throws Exception {
         String token=token();
         var input=new ExpansionRequest("off",1L,"room",List.of(new Card("angry","生气",null,null),new Card("no","不要",null,null)),new Context("adult",null,List.of(),null,null));
@@ -172,6 +207,100 @@ class ApiTest {
         mvc.perform(post("/api/v1/speech/play-1/cancel")).andExpect(status().isUnauthorized());
         mvc.perform(post("/api/v1/speech/play-1/cancel").header("Authorization","Bearer "+token))
             .andExpect(status().isOk()).andExpect(jsonPath("$.cancelled").value(false));
+    }
+    TrialService capabilities(boolean profiles,boolean scenes,boolean cards) throws Exception {
+        return new TrialService(mapper,gateway,directory.resolve("state.json").toString(),2,profiles,scenes,cards);
+    }
+    ExpansionRequest localInput(String id,Profile profile,Scene scene,List<Card> cards) {
+        return new ExpansionRequest(id,1L,"local-room",cards,new Context("adult",scene,List.of(),profile,null));
+    }
+    @Test void defaultCapabilitiesBlockPersonalizationBeforeProviderOrCharge() throws Exception {
+        var defaults=capabilities(false,false,true);
+        String token=defaults.create("default-local").token();
+        assertEquals(Map.of("profileManagement",false,"scenarioManagement",false,"customCards",true,"analytics",false),defaults.session(token).capabilities());
+        var profile=new Profile("爷爷",70,"苹果","短句",null,"中文","安静");
+        var card=List.of(new Card("apple","苹果",null,null));
+        for(var input:List.of(localInput("profile",profile,null,card),localInput("scene",null,new Scene("custom-scene-1","阳台","晒太阳"),card))) {
+            var error=assertThrows(ApiException.class,()->defaults.expand(token,input));
+            assertEquals(403,error.status); assertEquals("FEATURE_DISABLED",error.code);
+        }
+        assertEquals(0,calls.get()); assertEquals(2,defaults.session(token).remaining());
+        defaults.expand(token,localInput("basic",null,new Scene("kitchen","厨房","吃饭"),List.of(new Card("custom-apple","青苹果","酸一点的苹果",null))));
+        assertEquals(1,calls.get());
+        assertTrue(sent.get().contains("酸一点的苹果"));
+    }
+    @Test void profileAndSceneCapabilitiesAreIndependent() throws Exception {
+        var profile=new Profile("爷爷",70,"水果","短句",null,"普通话","安静");
+        var custom=new Scene("custom-scene-1","阳台","晒太阳");
+        var card=List.of(new Card("apple","苹果",null,null));
+        var profiles=capabilities(true,false,true);
+        String ptoken=profiles.create("profiles-only").token();
+        profiles.expand(ptoken,localInput("allowed",profile,null,card));
+        assertEquals("FEATURE_DISABLED",assertThrows(ApiException.class,()->profiles.expand(ptoken,localInput("blocked",null,custom,card))).code);
+        var scenes=capabilities(false,true,true);
+        String stoken=scenes.create("scenes-only").token();
+        scenes.expand(stoken,localInput("allowed",null,custom,card));
+        assertEquals("FEATURE_DISABLED",assertThrows(ApiException.class,()->scenes.expand(stoken,localInput("blocked",profile,null,card))).code);
+        assertFalse(profiles.session(ptoken).capabilities().get("scenarioManagement"));
+        assertFalse(scenes.session(stoken).capabilities().get("profileManagement"));
+        assertFalse(scenes.session(stoken).capabilities().get("analytics"));
+        assertEquals(2,calls.get());
+    }
+    @Test void customCardGateDoesNotBlockCoreCards() throws Exception {
+        var restricted=capabilities(false,false,false);
+        String token=restricted.create("core-only-client").token();
+        var error=assertThrows(ApiException.class,()->restricted.expand(token,localInput("custom",null,null,List.of(new Card("custom-1","我的水杯","蓝色杯子",null)))));
+        assertEquals(403,error.status); assertEquals("FEATURE_DISABLED",error.code); assertEquals(0,calls.get());
+        restricted.expand(token,localInput("core",null,null,List.of(new Card("core-refuse","不要",null,null))));
+        assertEquals(1,calls.get()); assertEquals(1,restricted.session(token).remaining());
+    }
+    @Test void profileDataReachesProviderWithoutInventingCurrentStateOrPersistingIt() throws Exception {
+        var allowed=capabilities(true,true,true); String token=allowed.create("personalized-local").token();
+        var profile=new Profile("爷爷",70,"听戏","用短句",null,"中文","慢热");
+        allowed.expand(token,localInput("personalized",profile,new Scene("custom-scene-2","露台","看花"),List.of(new Card("custom-flower","花","黄色小花",null))));
+        var envelope=mapper.readTree(sent.get());
+        var input=mapper.readTree(envelope.path("messages").path(1).path("content").asText());
+        assertEquals("中文",input.at("/context/profile/language").asText());
+        assertEquals("慢热",input.at("/context/profile/personality").asText());
+        assertEquals("听戏",input.at("/context/profile/interests").asText());
+        assertTrue(input.at("/context/profile/currentState").isNull());
+        assertEquals("黄色小花",input.at("/cards/0/description").asText());
+        assertTrue(envelope.path("messages").path(0).path("content").asText().contains("不能据此确定本人当前意图"));
+        String state=Files.readString(directory.resolve("state.json"));
+        for(String secret:List.of("爷爷","慢热","听戏","露台","黄色小花")) assertFalse(state.contains(secret));
+    }
+    @Test void capabilityChangeAfterRestartPreservesQuotaAndDeduplication() throws Exception {
+        var old=capabilities(false,false,true); String token=old.create("restarted-client").token();
+        var input=localInput("original",null,null,List.of(new Card("apple","苹果",null,null)));
+        old.expand(token,input);
+        var updated=capabilities(true,true,false);
+        assertEquals(1,updated.session(token).remaining());
+        assertTrue(updated.session(token).capabilities().get("profileManagement"));
+        assertTrue(updated.session(token).capabilities().get("scenarioManagement"));
+        assertFalse(updated.session(token).capabilities().get("customCards"));
+        assertEquals("REQUEST_ALREADY_COMPLETED",assertThrows(ApiException.class,()->updated.expand(token,input)).code);
+        assertEquals(1,calls.get());
+        var legacyProfile=new Profile("小明",8,"苹果","短句",null,null,null);
+        assertEquals("{\"name\":\"小明\",\"age\":8,\"interests\":\"苹果\",\"communicationStyle\":\"短句\",\"currentState\":null}",mapper.writeValueAsString(legacyProfile));
+    }
+    @Test void fullLegalLocalBackgroundLimitsReachProviderWithoutPersistence() throws Exception {
+        var allowed=capabilities(true,true,true); String token=allowed.create("boundary-client").token();
+        var validator=new LocalValidatorFactoryBean(); validator.afterPropertiesSet();
+        var endpoint=MockMvcBuilders.standaloneSetup(new ApiController(allowed,gateway,new SpeechGateway(mapper,"","","","","",1,"super-smart","")))
+            .setControllerAdvice(new Errors()).setValidator(validator).build();
+        var input=localInput("background-boundary",new Profile("名".repeat(100),90,"兴趣","短句","状态".repeat(250),"中文","安静"),
+            new Scene("custom-scene-max","景".repeat(100),"场景".repeat(1100)),List.of(new Card("custom-max","卡片","描述".repeat(250),null)));
+        endpoint.perform(post("/api/v1/expansions").header("Authorization","Bearer "+token).contentType("application/json").content(mapper.writeValueAsString(input)))
+            .andExpect(status().isOk());
+        var supplied=mapper.readTree(mapper.readTree(sent.get()).path("messages").path(1).path("content").asText());
+        assertEquals(500,supplied.at("/cards/0/description").asText().length());
+        assertEquals(100,supplied.at("/context/scene/name").asText().length());
+        assertEquals(2200,supplied.at("/context/scene/description").asText().length());
+        assertEquals(100,supplied.at("/context/profile/name").asText().length());
+        assertEquals(500,supplied.at("/context/profile/currentState").asText().length());
+        String state=Files.readString(directory.resolve("state.json"));
+        for(String fragment:List.of("名名","景景","场景","状态","描述")) assertFalse(state.contains(fragment));
+        validator.close();
     }
     @Test void sessionAndHealthContract() throws Exception {
         mvc.perform(get("/api/v1/health")).andExpect(status().isOk()).andExpect(jsonPath("$.llmConfigured").value(true));

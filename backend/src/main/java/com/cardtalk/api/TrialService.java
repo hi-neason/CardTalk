@@ -19,6 +19,7 @@ public class TrialService {
     private final Path file;
     private final int limit;
     private final ModelGateway model;
+    private final boolean profileManagement,scenarioManagement,customCards;
     private final Map<String,Entry> entries=new LinkedHashMap<>();
     private final ConcurrentHashMap<String,Object> locks=new ConcurrentHashMap<>();
     private final LinkedHashMap<String,Cached> cache=new LinkedHashMap<>();
@@ -28,7 +29,11 @@ public class TrialService {
     public record Snapshot(List<Entry> sessions) {}
     private record Cached(Instant expiresAt,String fingerprint,ExpansionResponse response) {}
     public TrialService(ObjectMapper mapper,ModelGateway model,@Value("${cardtalk.data-file}") String path,
-                        @Value("${cardtalk.daily-limit}") int limit) throws Exception {
+                        @Value("${cardtalk.daily-limit}") int limit,
+                        @Value("${cardtalk.profile-management-enabled:false}") boolean profileManagement,
+                        @Value("${cardtalk.scenario-management-enabled:false}") boolean scenarioManagement,
+                        @Value("${cardtalk.custom-cards-enabled:true}") boolean customCards) throws Exception {
+        this.profileManagement=profileManagement; this.scenarioManagement=scenarioManagement; this.customCards=customCards;
         this.mapper=mapper; this.model=model; this.file=Path.of(path).toAbsolutePath(); this.limit=limit;
         if(limit<1) throw new IllegalArgumentException("Daily limit must be positive");
         if(Files.exists(file)) {
@@ -52,6 +57,12 @@ public class TrialService {
         Entry authenticated=authenticate(token);
         synchronized(lock(authenticated.clientId())) {
             Entry entry=authenticate(token);
+            if(input.context().profile()!=null && !profileManagement)
+                throw new ApiException(403,"FEATURE_DISABLED","使用人资料管理尚未开启");
+            if(input.context().scene()!=null && input.context().scene().id().startsWith("custom-scene-") && !scenarioManagement)
+                throw new ApiException(403,"FEATURE_DISABLED","自定义场景管理尚未开启");
+            if(!customCards && input.cards().stream().anyMatch(card->card.id().startsWith("custom-")))
+                throw new ApiException(403,"FEATURE_DISABLED","自定义卡片尚未开启");
             String fingerprint;
             try { fingerprint=hash(mapper.writeValueAsString(input)); } catch(Exception ex) { throw new ApiException(400,"INVALID_REQUEST","请求无法读取"); }
             String previous=entry.completed().get(input.requestId());
@@ -104,7 +115,7 @@ public class TrialService {
     private int remaining(Entry e) { return Math.max(0,limit-(e.day().equals(today())?e.count():0)); }
     private SessionResponse session(String token,Entry e) {
         return new SessionResponse(token,remaining(e),limit,LocalDate.now(ZONE).plusDays(1).atStartOfDay(ZONE).toInstant().toString(),
-            Map.of("profileManagement",false,"scenarioManagement",false,"analytics",false));
+            Map.of("profileManagement",profileManagement,"scenarioManagement",scenarioManagement,"customCards",customCards,"analytics",false));
     }
     private static String today() { return LocalDate.now(ZONE).toString(); }
     private static ApiException unauthorized() { return new ApiException(401,"UNAUTHORIZED","体验身份已失效，请重新开始体验"); }

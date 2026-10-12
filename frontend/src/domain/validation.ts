@@ -1,3 +1,4 @@
+import { isCardImage, isProfileSnapshot, isSceneSnapshot, validateFamily } from './family-validation'
 import type { Card, Context, Expansion, State } from './types'
 type Obj = Record<string, unknown>
 const obj = (v: unknown): v is Obj => typeof v === 'object' && v !== null && !Array.isArray(v)
@@ -9,8 +10,8 @@ const arr = (v: unknown, max: number, check: (x: unknown) => boolean): v is unkn
 const nullable = (v: unknown, check: (x: unknown) => boolean) => v === null || check(v)
 const uniqueIds = (items: unknown[]) => new Set(items.map(item => (item as Obj).id)).size === items.length
 const source = (v: unknown) => one(v, ['independent', 'assisted', 'unknown'])
-export function isCard(v: unknown): v is Card { return obj(v) && str(v.id, 100) && str(v.label, 50) && str(v.category, 100) && str(v.icon, 100) && one(v.kind, ['word', 'phrase']) && (v.description === undefined || str(v.description, 500)) }
-export function isContext(v: unknown): v is Context { return obj(v) && one(v.preset, ['children', 'adult']) && nullable(v.sceneId, x => str(x, 100)) && str(v.communicatorName, 100) && source(v.source) && arr(v.participants, 20, x => obj(x) && str(x.id, 100) && str(x.name, 100)) && uniqueIds(v.participants) }
+export function isCard(v: unknown): v is Card { return obj(v) && str(v.id, 100) && str(v.label, 50) && str(v.category, 100) && str(v.icon, 100) && one(v.kind, ['word', 'phrase']) && (v.description === undefined || str(v.description, 500, true)) && (v.image === undefined || isCardImage(v.image)) }
+export function isContext(v: unknown): v is Context { return obj(v) && one(v.preset, ['children', 'adult']) && nullable(v.sceneId, x => str(x, 100)) && str(v.communicatorName, 100) && source(v.source) && arr(v.participants, 20, x => obj(x) && str(x.id, 100) && str(x.name, 100)) && uniqueIds(v.participants) && (v.currentState === undefined || str(v.currentState, 500, true)) && (v.profileId === undefined || str(v.profileId, 100)) && (v.profileSnapshot === undefined || isProfileSnapshot(v.profileSnapshot)) && (v.sceneSnapshot === undefined || isSceneSnapshot(v.sceneSnapshot) && v.sceneSnapshot.id === v.sceneId) }
 export function matchesCardSources(expansion: Expansion, cards: Card[]): boolean {
   return expansion.candidates.every(candidate => candidate.sourceCardIds.length === cards.length && candidate.sourceCardIds.every((id, index) => id === cards[index]!.id))
 }
@@ -39,9 +40,10 @@ export function validateState(value: unknown): ValidationResult {
     for (const key of ['aiExpansionEnabled', 'speechSynthesisEnabled', 'emotionRecognitionEnabled']) {
       if (Object.hasOwn(value.settings, key) && typeof value.settings[key] !== 'boolean') throw new Error('开关格式无效')
     }
+    if (Object.hasOwn(value, 'family') && !validateFamily(value.family)) throw new Error('家庭资料格式无效')
     const active = value.rooms.filter(r => (r as Obj).status === 'active') as Obj[]
     if (value.activeRoomId === null ? active.length !== 0 : active.length !== 1 || active[0]?.id !== value.activeRoomId) throw new Error('会话状态不一致')
-    return { valid: true, state: { ...value, settings: {
+    return { valid: true, state: { ...value, family: value.family ?? { profiles: [], cards: [], scenes: [] }, settings: {
       ...value.settings,
       aiExpansionEnabled: value.settings.aiExpansionEnabled ?? true,
       speechSynthesisEnabled: value.settings.speechSynthesisEnabled ?? false,

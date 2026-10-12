@@ -8,8 +8,8 @@ export function enableKeyboardAccess() {
       if (button.getAttribute('tabindex') !== value) button.setAttribute('tabindex', value);
       if (button.getAttribute('aria-disabled') !== String(disabled)) button.setAttribute('aria-disabled', String(disabled));
     });
-    document.querySelectorAll<HTMLElement>('uni-input[aria-label]').forEach(wrapper => {
-      const input = wrapper.querySelector('input');
+    document.querySelectorAll<HTMLElement>('uni-input[aria-label], uni-textarea[aria-label]').forEach(wrapper => {
+      const input = wrapper.querySelector('input, textarea');
       const name = wrapper.getAttribute('aria-label');
       if (input && name && input.getAttribute('aria-label') !== name) input.setAttribute('aria-label', name);
     });

@@ -19,7 +19,7 @@ export function deriveSelectedEmotion(cards: readonly Card[], enabled: boolean):
     const emotion = cardEmotions[card.id]!
     if (!selectedEmotions.includes(emotion)) selectedEmotions.push(emotion)
   }
-  const negated = cards.some(card => negationCardIds.has(card.id))
+  const negated = cards.some(card => negationCardIds.has(card.id) || ['不', '不是', '不要'].includes(card.label.trim()))
   return {
     emotion: !negated && selectedEmotions.length === 1 ? selectedEmotions[0]! : 'neutral',
     conflict: selectedEmotions.length > 1,
