@@ -1,6 +1,6 @@
+import { isCommunicationPreferences } from './preferences'
 import { CARDS, CORE_CARDS, CATEGORIES, SCENES } from './content'
-import type { Family, FamilyProfile, CustomCard, CustomScene, ProfileSnapshot, SceneSnapshot } from './types'
-export const MAX_CARD_IMAGE_BYTES = 200 * 1024
+import type { Family, FamilyProfile, CustomCard, CustomScene, ProfileSnapshot, SceneSnapshot, PublicProvenance } from './types'
 export const MAX_FAMILY_IMAGE_BYTES = 2 * 1024 * 1024
 export const MAX_CARD_IMAGE_DIMENSION = 1024
 const obj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
@@ -31,12 +31,11 @@ function decodeBase64(value: string): Uint8Array {
 
 /** Read dimensions from supported raster headers. SVG and remote URLs are never accepted. */
 export function cardImageInfo(image: unknown): { bytes: number; width: number; height: number } | null {
-  if (typeof image !== 'string' || image.length > Math.ceil(MAX_CARD_IMAGE_BYTES / 3) * 4 + 32) return null
+  if (typeof image !== 'string') return null
   const match = /^data:image\/(png|jpeg|webp);base64,([A-Za-z0-9+/]+={0,2})$/.exec(image)
   if (!match || match[2]!.length % 4 !== 0) return null
   try {
     const data = decodeBase64(match[2]!)
-    if (data.length > MAX_CARD_IMAGE_BYTES) return null
     const be16 = (i: number) => data[i]! * 256 + data[i + 1]!
     const be32 = (i: number) => data[i]! * 16777216 + data[i + 1]! * 65536 + data[i + 2]! * 256 + data[i + 3]!
     const le24 = (i: number) => data[i]! + data[i + 1]! * 256 + data[i + 2]! * 65536
@@ -71,17 +70,18 @@ export function cardImageInfo(image: unknown): { bytes: number; width: number; h
 }
 export const isCardImage = (image: unknown) => cardImageInfo(image) !== null
 export function isProfileSnapshot(v: unknown): v is ProfileSnapshot {
-  return obj(v) && !Object.hasOwn(v, 'observations') && !Object.hasOwn(v, 'observer') && text(v.name, 100, true) && age(v.age) && text(v.language, 80) && text(v.interests, 500) && text(v.personality, 500) && text(v.communicationStyle, 500) && text(v.currentState, 500)
+  return obj(v) && !Object.hasOwn(v, 'observations') && !Object.hasOwn(v, 'observer') && text(v.name, 100, true) && (v.preferences === undefined || isCommunicationPreferences(v.preferences)) && (v.image === undefined || isCardImage(v.image)) && age(v.age) && text(v.language, 80) && text(v.interests, 500) && text(v.personality, 500) && text(v.communicationStyle, 500) && text(v.currentState, 500)
 }
-export function isSceneSnapshot(v: unknown): v is SceneSnapshot { return obj(v) && text(v.id, 100, true) && text(v.name, 100, true) && text(v.description, 2200) }
+export function isPublicProvenance(v:unknown):v is PublicProvenance { return obj(v) && Object.keys(v).every(k=>['packageId','title','source','license','revision'].includes(k)) && text(v.packageId,40,true) && /^[a-z0-9][a-z0-9-]{0,39}$/.test(v.packageId) && text(v.title,100,true) && text(v.source,500,true) && text(v.license,500,true) && (v.revision===undefined || typeof v.revision==='number' && Number.isSafeInteger(v.revision) && v.revision>=0) }
+export function isSceneSnapshot(v: unknown): v is SceneSnapshot { return obj(v) && (v.provenance === undefined || isPublicProvenance(v.provenance)) && text(v.id, 100, true) && text(v.name, 100, true) && (v.image === undefined || isCardImage(v.image)) && text(v.description, 2200) }
 export function isFamilyProfile(v: unknown): v is FamilyProfile {
-  return obj(v) && text(v.id, 100, true) && v.id.startsWith('custom-profile-') && text(v.name, 100, true) && ['children', 'adult'].includes(v.preset as string) && age(v.age) && text(v.language, 80) && text(v.interests, 500) && text(v.personality, 500) && text(v.communicationStyle, 500) && text(v.observations, 1000) && text(v.observer, 100) && (v.observedAt === null || timestamp(v.observedAt)) && (!v.observations.trim() || !!v.observer.trim() && v.observedAt !== null) && typeof v.archived === 'boolean' && timestamp(v.updatedAt)
+  return obj(v) && text(v.id, 100, true) && v.id.startsWith('custom-profile-') && text(v.name, 100, true) && (v.preferences === undefined || isCommunicationPreferences(v.preferences)) && (v.image === undefined || isCardImage(v.image)) && ['children', 'adult'].includes(v.preset as string) && age(v.age) && text(v.language, 80) && text(v.interests, 500) && text(v.personality, 500) && text(v.communicationStyle, 500) && text(v.observations, 1000) && text(v.observer, 100) && (v.observedAt === null || timestamp(v.observedAt)) && (!v.observations.trim() || !!v.observer.trim() && v.observedAt !== null) && typeof v.archived === 'boolean' && timestamp(v.updatedAt)
 }
 export function isCustomCard(v: unknown): v is CustomCard {
-  return obj(v) && text(v.id, 100, true) && v.id.startsWith('custom-card-') && text(v.label, 50, true) && CATEGORIES.some(category => category.id === v.category) && text(v.icon, 100, true) && /^[a-z0-9-]+$/.test(v.icon) && ['word', 'phrase'].includes(v.kind as string) && (v.description === undefined || text(v.description, 500)) && (v.image === undefined || isCardImage(v.image)) && ids(v.sceneIds, 50) && typeof v.archived === 'boolean' && timestamp(v.updatedAt)
+  return obj(v) && (v.provenance === undefined || isPublicProvenance(v.provenance)) && text(v.id, 100, true) && v.id.startsWith('custom-card-') && text(v.label, 50, true) && CATEGORIES.some(category => category.id === v.category) && text(v.icon, 100, true) && /^[a-z0-9-]+$/.test(v.icon) && ['word', 'phrase'].includes(v.kind as string) && (v.description === undefined || text(v.description, 500)) && (v.image === undefined || isCardImage(v.image)) && ids(v.sceneIds, 50) && typeof v.archived === 'boolean' && timestamp(v.updatedAt)
 }
 export function isCustomScene(v: unknown): v is CustomScene {
-  return obj(v) && text(v.id, 100, true) && v.id.startsWith('custom-scene-') && text(v.name, 100, true) && text(v.description, 1000, true) && text(v.activities, 500) && text(v.objects, 500) && ids(v.recommendedCardIds, 70) && typeof v.archived === 'boolean' && timestamp(v.updatedAt)
+  return obj(v) && (v.provenance === undefined || isPublicProvenance(v.provenance)) && text(v.id, 100, true) && v.id.startsWith('custom-scene-') && text(v.name, 100, true) && (v.image === undefined || isCardImage(v.image)) && text(v.description, 1000, true) && text(v.activities, 500) && text(v.objects, 500) && ids(v.recommendedCardIds, 70) && typeof v.archived === 'boolean' && timestamp(v.updatedAt)
 }
 export function validateFamily(value: unknown): value is Family {
   if (!obj(value) || !Array.isArray(value.profiles) || value.profiles.length > 50 || !value.profiles.every(isFamilyProfile) || !Array.isArray(value.cards) || value.cards.length > 200 || !value.cards.every(isCustomCard) || !Array.isArray(value.scenes) || value.scenes.length > 50 || !value.scenes.every(isCustomScene)) return false
@@ -91,5 +91,5 @@ export function validateFamily(value: unknown): value is Family {
   if (value.scenes.some(scene => !scene.archived && SCENES.some(builtin => normalizedName(builtin.name) === normalizedName(scene.name)))) return false
   const sceneIds = new Set([...SCENES.map(scene => scene.id), ...value.scenes.map(scene => scene.id)])
   const cardIds = new Set([...CARDS, ...CORE_CARDS, ...value.cards].map(card => card.id))
-  return value.cards.every(card => card.sceneIds.every(id => sceneIds.has(id))) && value.scenes.every(scene => scene.recommendedCardIds.every(id => cardIds.has(id))) && value.cards.reduce((sum, card) => sum + (card.image ? cardImageInfo(card.image)!.bytes : 0), 0) <= MAX_FAMILY_IMAGE_BYTES
+  return value.cards.every(card => card.sceneIds.every(id => sceneIds.has(id))) && value.scenes.every(scene => scene.recommendedCardIds.every(id => cardIds.has(id))) && [...value.profiles, ...value.cards, ...value.scenes].reduce((sum, item) => sum + (item.image ? cardImageInfo(item.image)!.bytes : 0), 0) <= MAX_FAMILY_IMAGE_BYTES
 }

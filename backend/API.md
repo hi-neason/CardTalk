@@ -23,6 +23,7 @@ Default listener is `127.0.0.1:8080` (`CARDTALK_BIND_ADDRESS` / `PORT`). The fro
 | `CARDTALK_PROFILE_MANAGEMENT_ENABLED` | `false`; local development profile-context switch |
 | `CARDTALK_SCENARIO_MANAGEMENT_ENABLED` | `false`; local development custom-scene switch |
 | `CARDTALK_CUSTOM_CARDS_ENABLED` | `true`; independent local custom-card switch, pricing undecided |
+| `CARDTALK_ANALYTICS_ENABLED` | `false`; independent local analytics development switch |
 | `CARDTALK_DATA_FILE` | `./data/trial-metadata.json` relative to launch directory |
 | `CARDTALK_XFYUN_APP_ID` / `CARDTALK_XFYUN_API_KEY` / `CARDTALK_XFYUN_API_SECRET` | empty; server-only credentials for the selected Xfyun product |
 | `CARDTALK_XFYUN_ENGINE` | `super-smart`; optional `voice-clone` consumes an existing authorized multi-style resource |
@@ -73,7 +74,7 @@ Creating a session with the same client ID rotates its token and invalidates the
 
 ### Independent local capabilities
 
-Both trial-session routes return `profileManagement`, `scenarioManagement`, `customCards`, and `analytics`. The first three follow independent backend startup environment flags; analytics remains false. Restart after changing flags and GET the existing trial session to refresh capabilities. Existing tokens, quota counts and completed-request metadata remain intact.
+Both trial-session routes return `profileManagement`, `scenarioManagement`, `customCards`, and `analytics`. All four follow independent backend startup environment flags. Analytics runs locally in the Web client; enabling it does not upload communication history or create an analysis API. Restart after changing flags and GET the existing trial session to refresh capabilities. Existing tokens, quota counts and completed-request metadata remain intact.
 
 These flags apply to the local development process, **not** a paid purchase, per-family license or verified identity. No cloud profile/card/scenario CRUD or storage is introduced. All family data is still on the client; only the necessary request snapshot is transiently sent to the selected model service.
 

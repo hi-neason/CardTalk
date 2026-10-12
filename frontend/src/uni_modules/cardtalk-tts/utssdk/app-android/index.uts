@@ -1,0 +1,84 @@
+import TextToSpeech from 'android.speech.tts.TextToSpeech';
+import UtteranceProgressListener from 'android.speech.tts.UtteranceProgressListener';
+import Voice from 'android.speech.tts.Voice';
+import { UTSAndroid } from 'io.dcloud.uts';
+import Bundle from 'android.os.Bundle';
+import { SpeechOptions, ListVoicesOptions, DeviceVoice } from '../interface.uts';
+
+let engine: TextToSpeech | null = null;
+let ready = false;
+let engineGeneration = 0;
+let active: SpeechOptions | null = null;
+let voiceRequests: ListVoicesOptions[] = [];
+function finish(id: string, status: string, message: string = '') {
+  const current = active;
+  if (current == null || current.id != id) return;
+  active = null;
+  current.onEvent({ id, status, message });
+}
+class Progress extends UtteranceProgressListener {
+  constructor() { super(); }
+  override onStart(id: string): void {
+    UTSAndroid.getDispatcher('main').async((_value: any | null) => { if (active?.id == id) active!.onEvent({ id, status: 'started', message: '' }); }, null);
+  }
+  override onDone(id: string): void { UTSAndroid.getDispatcher('main').async((_value: any | null) => { finish(id, 'completed'); }, null); }
+  override onError(id: string): void { UTSAndroid.getDispatcher('main').async((_value: any | null) => { finish(id, 'failed', '设备朗读失败'); }, null); }
+  override onStop(id: string, _interrupted: boolean): void { UTSAndroid.getDispatcher('main').async((_value: any | null) => { finish(id, 'interrupted'); }, null); }
+}
+function voices(): DeviceVoice[] {
+  const result: DeviceVoice[] = [];
+  engine?.getVoices()?.forEach((voice: Voice) => {
+    if (voice.getLocale().getLanguage() == 'zh' && !voice.isNetworkConnectionRequired()) result.push({ id: voice.getName(), name: voice.getName(), language: voice.getLocale().toLanguageTag() });
+  });
+  return result;
+}
+function begin() {
+  const current = active;
+  if (!ready || current == null || engine == null) return;
+  const available = engine!.getVoices();
+  let selected: Voice | null = null;
+  available?.forEach((voice: Voice) => {
+    if (voice.getLocale().getLanguage() == 'zh' && !voice.isNetworkConnectionRequired() && (selected == null || voice.getName() == current.voiceId)) selected = voice;
+  });
+  if (selected == null || engine!.setVoice(selected!) != TextToSpeech.SUCCESS) { finish(current.id, 'unavailable', '设备未安装中文离线语音'); return; }
+  if (engine!.setSpeechRate(current.rate.toFloat()) != TextToSpeech.SUCCESS) { finish(current.id, 'failed', '设备不支持所选语速'); return; }
+  const params = new Bundle();
+  params.putFloat(TextToSpeech.Engine.KEY_PARAM_VOLUME, current.volume.toFloat());
+  if (engine!.speak(current.text, TextToSpeech.QUEUE_FLUSH, params, current.id) == TextToSpeech.ERROR) finish(current.id, 'failed', '设备无法开始朗读');
+}
+class InitListener implements TextToSpeech.OnInitListener {
+  token: number;
+  constructor(token: number) { this.token = token; }
+  override onInit(status: Int): void {
+    UTSAndroid.getDispatcher('main').async((_value: any | null) => {
+      if (engine == null || this.token != engineGeneration) return;
+      ready = status == TextToSpeech.SUCCESS;
+      if (ready) { engine!.setOnUtteranceProgressListener(new Progress()); begin(); }
+      else if (active != null) finish(active!.id, 'unavailable', '设备语音服务初始化失败');
+      const pending = voiceRequests; voiceRequests = [];
+      pending.forEach((request: ListVoicesOptions) => { ready ? request.success(voices()) : request.fail('设备语音服务初始化失败'); });
+      if (!ready) { engine?.shutdown(); engine = null; }
+    }, null);
+  }
+}
+function initialize() { if (engine == null) engine = new TextToSpeech(UTSAndroid.getAppContext()!, new InitListener(++engineGeneration)); }
+function stopImpl() {
+  const previous = active; active = null;
+  engine?.stop();
+  if (previous != null) previous.onEvent({ id: previous.id, status: 'interrupted', message: '' });
+}
+export function stop() { UTSAndroid.getDispatcher('main').async((_value: any | null) => { stopImpl(); }, null); }
+@UTSJS.keepAlive
+export function speak(options: SpeechOptions) {
+  UTSAndroid.getDispatcher('main').async((_value: any | null) => { stopImpl(); active = options; initialize(); if (ready) begin(); }, null);
+}
+export function listVoices(options: ListVoicesOptions) {
+  UTSAndroid.getDispatcher('main').async((_value: any | null) => { if (ready) options.success(voices()); else { voiceRequests.push(options); initialize(); } }, null);
+}
+export function dispose() {
+  UTSAndroid.getDispatcher('main').async((_value: any | null) => {
+    stopImpl(); engineGeneration++; engine?.shutdown(); engine = null; ready = false;
+    const pending = voiceRequests; voiceRequests = [];
+    pending.forEach((request: ListVoicesOptions) => request.fail('语音服务已关闭'));
+  }, null);
+}

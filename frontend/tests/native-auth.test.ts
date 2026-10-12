@@ -1,0 +1,12 @@
+import {describe,it,expect,vi} from 'vitest';
+import {accountApi} from '../src/platform/account';
+import {familyHeaders,clearNativeFamilyToken,setNativeFamilyToken} from '../src/platform/familyTransport';
+describe('native family session commit ownership',()=>{
+ it('late login cannot overwrite newer login; credentials never enter disk storage',async()=>{clearNativeFamilyToken();const pending:any[]=[];const before=(globalThis as any).uni;(globalThis as any).uni={request:(options:any)=>{pending.push(options);return {abort:vi.fn()};},setStorageSync:()=>{throw new Error('Secrets must not be persisted');}};
+  try{const a=accountApi.login('first','long-test-password'),b=accountApi.login('second','long-test-password');pending[1].success({statusCode:200,data:{account:{id:'b',username:'second'},token:'b'.repeat(43)}});await b;pending[0].success({statusCode:200,data:{account:{id:'a',username:'first'},token:'a'.repeat(43)}});await expect(a).rejects.toThrow('取消');expect(familyHeaders().Authorization).toBe(`Bearer ${'b'.repeat(43)}`);}finally{(globalThis as any).uni=before;clearNativeFamilyToken();}
+ });
+ it('old logout revokes the captured token without clearing a newly logged-in token',async()=>{clearNativeFamilyToken();setNativeFamilyToken('a'.repeat(43));const pending:any[]=[];const before=(globalThis as any).uni;(globalThis as any).uni={request:(options:any)=>{pending.push(options);return {abort:vi.fn()};}};
+  try{const logout=accountApi.logout();expect(familyHeaders()).toEqual({});expect(pending[0].header.Authorization).toBe(`Bearer ${'a'.repeat(43)}`);const login=accountApi.login('second','long-test-password');pending[1].success({statusCode:200,data:{account:{id:'b',username:'second'},token:'b'.repeat(43)}});await login;pending[0].success({statusCode:200,data:{loggedOut:true}});await logout;expect(familyHeaders().Authorization).toBe(`Bearer ${'b'.repeat(43)}`);}finally{(globalThis as any).uni=before;clearNativeFamilyToken();}
+ });
+ it('leaving the login surface invalidates its pending credential commit',async()=>{clearNativeFamilyToken();let pending:any;const before=(globalThis as any).uni;(globalThis as any).uni={request:(options:any)=>{pending=options;return {abort:vi.fn()};}};try{const login=accountApi.login('first','long-test-password');accountApi.cancelAuthentication();pending.success({statusCode:200,data:{account:{id:'a',username:'first'},token:'a'.repeat(43)}});await expect(login).rejects.toThrow('取消');expect(familyHeaders()).toEqual({});}finally{(globalThis as any).uni=before;clearNativeFamilyToken();}});
+});

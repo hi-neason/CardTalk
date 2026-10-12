@@ -3,6 +3,7 @@ package com.cardtalk.api;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
+import com.cardtalk.operationsmetrics.MetricsRegistry;
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
 import java.io.ByteArrayOutputStream;
@@ -20,6 +21,12 @@ import java.util.concurrent.*;
 /** Xfyun super-human TTS protocol. No speech content, audio or signed URL is logged or persisted. */
 @Component
 public class SpeechGateway {
+    private MetricsRegistry metrics;
+    private VoiceCatalog catalog;
+    @org.springframework.beans.factory.annotation.Autowired
+    public void setVoiceCatalog(VoiceCatalog catalog) { this.catalog=catalog; }
+    @org.springframework.beans.factory.annotation.Autowired
+    public void setMetrics(MetricsRegistry metrics) { this.metrics=metrics; }
     private static final int MAX_AUDIO=5_000_000;
     private static final int MAX_MESSAGE=7_000_000;
     private final ObjectMapper mapper;
@@ -41,28 +48,39 @@ public class SpeechGateway {
         if(timeoutSeconds<1 || timeoutSeconds>120) throw new IllegalArgumentException("Speech timeout must be 1–120 seconds");
         this.timeoutSeconds=timeoutSeconds;
     }
-    public boolean configured() { return !endpoint.isBlank() && !appId.isBlank() && !key.isBlank() && !secret.isBlank() && !voice.isBlank() && (!engine.equals("voice-clone") || !resourceId.isBlank()); }
+    private VoiceCatalog.Voice legacy() { return new VoiceCatalog.Voice("default","系统默认音色","all",voice,resourceId); }
+    private boolean configured(VoiceCatalog.Voice selected) { return !endpoint.isBlank()&&!appId.isBlank()&&!key.isBlank()&&!secret.isBlank()&&!selected.vcn().isBlank()&&(!engine.equals("voice-clone")||!selected.resourceId().isBlank()); }
+    public boolean configured() { return configured(legacy())||catalog!=null&&catalog.voices().stream().anyMatch(this::configured); }
+    public record VoiceView(String key,String label,String audience,boolean emotionSupported,boolean configured) {}
+    public List<VoiceView> voices() { var result=new ArrayList<VoiceView>();var items=new ArrayList<VoiceCatalog.Voice>();items.add(legacy());if(catalog!=null)items.addAll(catalog.voices());for(var v:items)result.add(new VoiceView(v.key(),v.label(),v.audience(),configured(v)&&engine.equals("voice-clone"),configured(v)));return List.copyOf(result); }
     public boolean emotionSupported() { return configured() && engine.equals("voice-clone"); }
     public String engine() { return engine; }
-    public byte[] synthesize(String identity,String requestId,String text,Double rate,String emotion) {
-        if(!configured()) throw new ApiException(503,"TTS_NOT_CONFIGURED","尚未配置讯飞拟人合成，请在设置中选择设备发声");
+    public byte[] synthesize(String identity,String requestId,String text,Double rate,String emotion) { return synthesize(identity,requestId,text,rate,emotion,null,null); }
+    public byte[] synthesize(String identity,String requestId,String text,Double rate,String emotion,String voiceKey,String audience) {
+        if(audience!=null&&!Set.of("children","adult").contains(audience))throw new ApiException(400,"INVALID_VOICE_AUDIENCE","音色使用人类型不正确");
+        var selected=catalog==null?legacy():catalog.select(voiceKey,audience,legacy());
+        if(catalog==null&&voiceKey!=null&&!voiceKey.isBlank()&&!voiceKey.equals("default"))throw new ApiException(422,"TTS_VOICE_UNKNOWN","所选音色不在服务器目录中，请重新选择");
+        if(!configured(selected)) throw new ApiException(503,"TTS_NOT_CONFIGURED","尚未配置讯飞拟人合成，请在设置中选择设备发声");
         if(emotion!=null && !emotion.equals("neutral") && !emotionSupported())
             throw new ApiException(422,"TTS_EMOTION_UNSUPPORTED","当前讯飞拟人接口未提供可验证的情绪控制，请关闭情绪识别或切换设备发声");
         String id=operationId(identity,requestId);
         var operation=new Operation();
         register(id,operation);
         CompletableFuture<WebSocket> opening=null;
+        MetricsRegistry.Call metric=null;
         long deadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(timeoutSeconds);
         try {
             URI signed=sign(URI.create(endpoint),key,secret,Instant.now());
+            metric=MetricsRegistry.provider(metrics,MetricsRegistry.Provider.speech_tts);
             opening=client.newWebSocketBuilder().connectTimeout(Duration.ofSeconds(Math.min(10,timeoutSeconds)))
                 .buildAsync(signed,operation);
             operation.opening=opening;
             if(operation.aborted) opening.cancel(true);
             WebSocket socket=opening.get(remaining(deadline),TimeUnit.NANOSECONDS);
             if(operation.result.isCompletedExceptionally()) return operation.result.get();
-            socket.sendText(mapper.writeValueAsString(payload(text,rate,emotion)),true).get(remaining(deadline),TimeUnit.NANOSECONDS);
-            return operation.result.get(remaining(deadline),TimeUnit.NANOSECONDS);
+            socket.sendText(mapper.writeValueAsString(payload(text,rate,emotion,selected)),true).get(remaining(deadline),TimeUnit.NANOSECONDS);
+            byte[] audio=operation.result.get(remaining(deadline),TimeUnit.NANOSECONDS);
+            metric.success();return audio;
         } catch(CancellationException ex) { throw new ApiException(409,"TTS_CANCELLED","语音合成已取消");
         } catch(TimeoutException ex) { throw new ApiException(504,"TTS_TIMEOUT","讯飞语音生成超时，请重试");
         } catch(InterruptedException ex) { Thread.currentThread().interrupt(); throw new ApiException(409,"TTS_CANCELLED","语音合成已取消");
@@ -72,6 +90,7 @@ public class SpeechGateway {
         } catch(ApiException ex) { throw ex;
         } catch(Exception ex) { throw new ApiException(502,"TTS_UPSTREAM_ERROR","讯飞语音服务响应不可用");
         } finally {
+            if(metric!=null)metric.close();
             operation.abort();
             if(opening!=null && !opening.isDone()) opening.cancel(true);
             synchronized(this) { active.remove(id,operation); }
@@ -102,16 +121,17 @@ public class SpeechGateway {
         try { return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(identity.getBytes(StandardCharsets.UTF_8)))+":"+id; }
         catch(Exception ex) { throw new IllegalStateException(ex); }
     }
-    Map<String,Object> payload(String text,Double rate,String emotion) {
+    Map<String,Object> payload(String text,Double rate,String emotion) { return payload(text,rate,emotion,legacy()); }
+    private Map<String,Object> payload(String text,Double rate,String emotion,VoiceCatalog.Voice selected) {
         double actual=rate==null?1.0:rate;
         // App rate 0.5/1/2 maps to the vendor's documented 0/50/100 endpoints.
         int speed=(int)Math.round(actual<=1?(actual-0.5)*100:50+(actual-1)*50);
-        var tts=new LinkedHashMap<String,Object>(Map.of("vcn",voice,"speed",Math.max(0,Math.min(100,speed)),"volume",50,"pitch",50,"bgs",0,"rhy",0,
+        var tts=new LinkedHashMap<String,Object>(Map.of("vcn",selected.vcn(),"speed",Math.max(0,Math.min(100,speed)),"volume",50,"pitch",50,"bgs",0,"rhy",0,
             "audio",Map.of("encoding","lame","sample_rate",24000,"channels",1,"bit_depth",16,"frame_size",0)));
         var header=new LinkedHashMap<String,Object>(Map.of("app_id",appId,"status",2));
         var parameters=new LinkedHashMap<String,Object>();
         if(engine.equals("voice-clone")) {
-            header.put("res_id",resourceId); tts.put("languageID",0);
+            header.put("res_id",selected.resourceId()); tts.put("languageID",0);
             if(emotion!=null && !emotion.equals("neutral")) tts.put("style",Map.of("happy","glad","sad","sad","angry","angry","fearful","afraid").get(emotion));
         } else {
             parameters.put("oral",Map.of("oral_level","low","spark_assist",0,"remain",1));

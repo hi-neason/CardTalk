@@ -1,0 +1,58 @@
+import picker from '@ohos.file.picker';
+import fs from '@ohos.file.fs';
+import util from '@ohos.util';
+import { DocumentOptions } from '../interface.uts';
+
+let active: DocumentOptions | null = null;
+function finish(id: string, status: string, base64: string = '', message: string = '') {
+  const current = active;
+  if (current == null || current.id != id) return;
+  active = null; current.onResult({ id, status, base64, message });
+}
+// System DocumentViewPicker has no dismiss method. Cancellation invalidates the result;
+// a late selection must never start reading or writing and the user can close the system sheet.
+export function cancel(id: string) { finish(id, 'cancelled'); }
+export function openDocument(options: DocumentOptions) {
+  if (active != null) { options.onResult({ id: options.id, status: 'failed', base64: '', message: '已有文件选择窗口，请先完成或取消' }); return; }
+  active = options;
+  const view = new picker.DocumentViewPicker(getContext());
+  const request = options.mode == 'import'
+    ? view.select({ maxSelectNumber: 1, fileSuffixFilters: ['JSON|.json'] })
+    : view.save({ newFileNames: [options.filename], fileSuffixChoices: ['JSON|.json'] });
+  request.then((uris: string[]) => {
+    if (active?.id != options.id) return;
+    if (uris.length == 0) { finish(options.id, 'cancelled'); return; }
+    try {
+      const file = fs.openSync(uris[0], options.mode == 'import' ? fs.OpenMode.READ_ONLY : fs.OpenMode.WRITE_ONLY | fs.OpenMode.CREATE | fs.OpenMode.TRUNC);
+      let encoded = '';
+      try {
+        const codec = new util.Base64Helper();
+        if (options.mode == 'import') {
+          if (fs.statSync(file.fd).size > options.maxBytes) throw new Error('文件超过本机备份容量');
+          const output = new Uint8Array(options.maxBytes + 1);
+          let total = 0;
+          while (total <= options.maxBytes) {
+            const buffer = new ArrayBuffer(Math.min(8192, output.length - total));
+            const count = fs.readSync(file.fd, buffer);
+            if (count == 0) break;
+            output.set(new Uint8Array(buffer, 0, count), total); total += count;
+          }
+          if (total > options.maxBytes) throw new Error('文件超过本机备份容量');
+          encoded = codec.encodeToStringSync(output.slice(0, total));
+        } else {
+          const bytes = codec.decodeSync(options.base64);
+          if (bytes.length > options.maxBytes) throw new Error('文件超过导出容量');
+          let total = 0;
+          while (total < bytes.length) {
+            const count = fs.writeSync(file.fd, bytes.slice(total).buffer);
+            if (count <= 0) throw new Error('文件未写入完成');
+            total += count;
+          }
+          fs.fsyncSync(file.fd);
+
+        }
+      } finally { fs.closeSync(file.fd); }
+      finish(options.id, options.mode == 'import' ? 'selected' : 'saved', encoded);
+    } catch (_) { finish(options.id, 'failed', '', '无法读写文件，或文件超过本机备份容量'); }
+  }).catch(() => { finish(options.id, 'failed', '', '文件选择未完成，请重试'); });
+}

@@ -1,0 +1,2 @@
+export type DecodeImageResult = { valid: boolean, width: number, height: number }
+export type DecodeImageOptions = { base64: string, maxDimension: number, onResult: (result: DecodeImageResult) => void }

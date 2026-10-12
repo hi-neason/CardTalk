@@ -20,11 +20,12 @@ public class ApiController {
     @GetMapping("/trial-session") public SessionResponse session(@RequestHeader(value="Authorization",required=false) String authorization) { return trials.session(token(authorization)); }
     @PostMapping("/expansions") public ExpansionResponse expand(@RequestHeader(value="Authorization",required=false) String authorization,
                                                                @Valid @RequestBody ExpansionRequest input) { return trials.expand(token(authorization),input); }
+    @GetMapping("/voices") public ResponseEntity<?> voices() { return ResponseEntity.ok().header("Cache-Control","no-store").body(speech.voices()); }
     @PostMapping("/speech") public ResponseEntity<byte[]> speak(@RequestHeader(value="Authorization",required=false) String authorization,
                                                                @Valid @RequestBody SpeechRequest input) {
         trials.session(token(authorization));
         return ResponseEntity.ok().header("Content-Type","audio/mpeg").header("Cache-Control","no-store")
-            .body(speech.synthesize(token(authorization),input.requestId(),input.text(),input.rate(),input.emotion()));
+            .body(speech.synthesize(token(authorization),input.requestId(),input.text(),input.rate(),input.emotion(),input.voiceKey(),input.audience()));
     }
     @PostMapping("/speech/{requestId}/cancel") public Map<String,Boolean> cancelSpeech(
             @RequestHeader(value="Authorization",required=false) String authorization,@PathVariable String requestId) {

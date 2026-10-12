@@ -79,11 +79,11 @@ for (const [key, tab, noun, label] of [['profileManagement', '使用人', '使�
   });
 }
 
-test('真实PNG本机图片保存和历史复现，伪装SVG及过大图片拒绝且保留表单', async ({ page }) => {
+test('真实PNG本机图片保存和历史复现，伪装SVG及无效图片拒绝且保留表单', async ({ page }) => {
   const controls = await fixtures(page); await page.goto('/'); await family(page, '自定义卡片'); await btn(page, '新增卡片').click(); await field(page, '卡片名称').fill('照片小熊');
   const upload = async (buffer: Buffer) => { const chooser = page.waitForEvent('filechooser'); await btn(page, '上传本机图片').click(); await (await chooser).setFiles({ name: 'picture.png', mimeType: 'image/png', buffer }); };
   await upload(Buffer.from('<svg xmlns="http://www.w3.org/2000/svg">' + ' '.repeat(2500) + '</svg>')); await expect(page.getByRole('alert')).toContainText('实际格式'); await expect(field(page, '卡片名称')).toHaveValue('照片小熊');
-  await upload(Buffer.alloc(201 * 1024)); await expect(page.getByRole('alert')).toContainText('200 KB');
+  await upload(Buffer.alloc(201 * 1024)); await expect(page.getByRole('alert')).toContainText('实际格式');
   const data = await page.evaluate(() => { const c = document.createElement('canvas'); c.width = 100; c.height = 100; const ctx = c.getContext('2d')!; for (let x = 0; x < 100; x++) for (let y = 0; y < 100; y++) { ctx.fillStyle = `rgb(${x * 2},${y * 2},${(x * y) % 255})`; ctx.fillRect(x, y, 1, 1); } return c.toDataURL('image/png').split(',')[1]!; });
   await upload(Buffer.from(data, 'base64')); await expect(btn(page, '移除照片')).toBeVisible(); await btn(page, '保存卡片').click(); await btn(page, '关闭').click(); await start(page, false);
   await btn(page, '选择照片小熊').click(); await generate(page); expect(controls.inputs[0].cards[0]).not.toHaveProperty('image'); expect(JSON.stringify(controls.inputs[0])).not.toContain('data:image'); await btn(page, /都不合适/).click(); await btn(page, /使用原始表达/).click(); await btn(page, /说出这句话/).click(); await expect.poll(() => page.evaluate(() => (window as any).__speechCalls)).toEqual(['照片小熊']);

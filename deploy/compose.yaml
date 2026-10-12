@@ -1,0 +1,65 @@
+services:
+  db:
+    image: ${CARDTALK_IMAGE_REGISTRY:-docker.io/library}/postgres:17-alpine
+    environment:
+      POSTGRES_DB: cardtalk
+      POSTGRES_USER: cardtalk
+      POSTGRES_PASSWORD: ${CARDTALK_DATABASE_PASSWORD:?Set a database password}
+    volumes:
+      - database:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cardtalk -d cardtalk"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+  api:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.api
+      args:
+        CARDTALK_IMAGE_REGISTRY: ${CARDTALK_IMAGE_REGISTRY:-docker.io/library}
+    env_file: ${CARDTALK_API_ENV_FILE:-./api.env}
+    environment:
+      CARDTALK_BIND_ADDRESS: 0.0.0.0
+      CARDTALK_FAMILY_REPOSITORY_MODE: postgres
+      CARDTALK_FAMILY_JDBC_URL: jdbc:postgresql://db:5432/cardtalk
+      CARDTALK_FAMILY_JDBC_USER: cardtalk
+      CARDTALK_FAMILY_JDBC_PASSWORD: ${CARDTALK_DATABASE_PASSWORD:?Set a database password}
+      CARDTALK_FAMILY_COOKIE_SECURE: "true"
+      CARDTALK_FAMILY_ALLOWED_ORIGINS: https://${CARDTALK_DOMAIN:?Set the HTTPS domain}
+      CARDTALK_TRIAL_REPOSITORY_MODE: postgres
+      CARDTALK_REPORT_QUOTA_MODE: postgres
+      CARDTALK_CLOUD_ENABLED: "true"
+      CARDTALK_BILLING_ENFORCED: "true"
+      CARDTALK_ASSET_METADATA_MODE: postgres
+      CARDTALK_ASSET_DIRECTORY: /data/assets
+      CARDTALK_DATA_FILE: /data/trial-metadata.json
+    volumes:
+      - application:/data
+      - ./config:/config:ro
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+  web:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.web
+      args:
+        CARDTALK_IMAGE_REGISTRY: ${CARDTALK_IMAGE_REGISTRY:-docker.io/library}
+    environment:
+      CARDTALK_DOMAIN: ${CARDTALK_DOMAIN:?Set the HTTPS domain}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - certificates:/data
+      - caddy_config:/config
+    depends_on: [api]
+    restart: unless-stopped
+volumes:
+  database:
+  application:
+  certificates:
+  caddy_config:

@@ -1,0 +1,11 @@
+export type SpeechEvent = { id: string, status: string, message: string }
+export type SpeechOptions = {
+  id: string,
+  text: string,
+  rate: number,
+  volume: number,
+  voiceId: string,
+  onEvent: (event: SpeechEvent) => void
+}
+export type DeviceVoice = { id: string, name: string, language: string }
+export type ListVoicesOptions = { success: (voices: DeviceVoice[]) => void, fail: (message: string) => void }

@@ -1,0 +1,16 @@
+import {familyHeaders} from './familyTransport';
+import { newId } from './storage';
+export type FamilyFeature='profiles'|'scenarios'|'analytics';
+export interface Entitlement {feature:FamilyFeature;active:boolean;reason:string;expiresAt:string|null;sources:string[];actions:{readExisting:boolean;writeAdvanced:boolean;purchase:boolean}}
+export interface Product {id:string;feature:FamilyFeature;title:string;amountMinor:number;currency:'CNY';durationDays:number}
+export interface BillingOrder {id:string;familyId:string;actorId:string;productId:string;feature:FamilyFeature;title:string;amountMinor:number;currency:'CNY';durationDays:number;provider:string;status:string;checkoutUrl:string|null;createdAt:string;updatedAt:string}
+const BASE=import.meta.env.VITE_API_BASE_URL?.replace(/\/$/,'')||'';
+export class BillingApiError extends Error {constructor(public status:number,message:string){super(message)}}
+export function createBillingClient(familyId:string){
+ const prefix=`${BASE}/api/v1/families/${encodeURIComponent(familyId)}`;
+ const call=<T>(path:string,method:'GET'|'POST'='GET',data?:unknown)=>new Promise<T>((resolve,reject)=>uni.request({url:prefix+path,method,data:data as UniApp.RequestOptions['data'],withCredentials:true,timeout:40000,header:{...familyHeaders(),'Content-Type':'application/json'},success:r=>{if(r.statusCode>=200&&r.statusCode<300)resolve(r.data as T);else reject(new BillingApiError(r.statusCode,(r.data as {message?:string})?.message||'家庭功能服务暂时不可用'));},fail:()=>reject(new BillingApiError(0,'连接失败，请保留当前订单并重试，避免重复下单。'))}));
+ return {entitlements:()=>call<{configured:boolean;role?:string;features:Entitlement[]}>('/entitlements'),products:()=>call<{products:Product[];provider:string;providerConfigured:boolean;canPurchase:boolean}>('/billing/products'),orders:()=>call<BillingOrder[]>('/billing/orders'),create:(productId:string,requestId:string)=>call<{order:BillingOrder;providerConfigured:boolean}>('/billing/orders','POST',{productId,requestId}),query:(id:string)=>call<BillingOrder>(`/billing/orders/${encodeURIComponent(id)}/query`,'POST',{}),close:(id:string)=>call<BillingOrder>(`/billing/orders/${encodeURIComponent(id)}/close`,'POST',{}),refund:(id:string,reason:string)=>call<BillingOrder>(`/billing/orders/${encodeURIComponent(id)}/refund`,'POST',{reason})};
+}
+export function billingRequest(accountId:string,familyId:string,productId:string){const key=`cardtalk.billing-request.v1.${accountId}.${familyId}.${productId}`;const value=uni.getStorageSync(key);if(typeof value==='string'&&/^[A-Za-z0-9_-]{1,100}$/.test(value))return value;const id=newId();uni.setStorageSync(key,id);if(uni.getStorageSync(key)!==id)throw new Error('下单编号无法保存在本机，请检查空间后再下单。');return id;}
+export function bindBillingOrder(accountId:string,familyId:string,productId:string,orderId:string){const key=`cardtalk.billing-request.v1.${accountId}.${familyId}.${productId}`;uni.setStorageSync(`${key}.order`,{requestId:uni.getStorageSync(key),orderId});}
+export function completeBillingRequest(accountId:string,familyId:string,productId:string,orderId:string){const key=`cardtalk.billing-request.v1.${accountId}.${familyId}.${productId}`,binding=uni.getStorageSync(`${key}.order`);if(binding?.orderId!==orderId||binding.requestId!==uni.getStorageSync(key))return;uni.removeStorageSync(key);uni.removeStorageSync(`${key}.order`);}

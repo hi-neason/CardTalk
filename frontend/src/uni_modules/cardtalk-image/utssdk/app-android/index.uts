@@ -1,0 +1,22 @@
+import { UTSAndroid } from 'io.dcloud.uts';
+import Base64 from 'android.util.Base64';
+import BitmapFactory from 'android.graphics.BitmapFactory';
+import { DecodeImageOptions } from '../interface.uts';
+export function decodeImage(options: DecodeImageOptions) {
+  UTSAndroid.getDispatcher('io').async((_value: any | null) => {
+    let valid = false; let width = 0; let height = 0;
+    try {
+      const bytes = Base64.decode(options.base64, Base64.NO_WRAP);
+      const bounds = new BitmapFactory.Options(); bounds.inJustDecodeBounds = true;
+      BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds);
+      if (bounds.outWidth > 0 && bounds.outHeight > 0 && bounds.outWidth <= options.maxDimension && bounds.outHeight <= options.maxDimension) {
+        const bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size);
+        if (bitmap != null) {
+          try { width = bitmap.getWidth(); height = bitmap.getHeight(); valid = width == bounds.outWidth && height == bounds.outHeight; }
+          finally { bitmap.recycle(); }
+        }
+      }
+    } catch (_) { valid = false; }
+    UTSAndroid.getDispatcher('main').async((_main: any | null) => { options.onResult({ valid, width, height }); }, null);
+  }, null);
+}

@@ -1,0 +1,9 @@
+export type DocumentResult = { id: string, status: string, base64: string, message: string }
+export type DocumentOptions = {
+  id: string,
+  mode: string,
+  filename: string,
+  base64: string,
+  maxBytes: number,
+  onResult: (result: DocumentResult) => void
+}

@@ -1,0 +1,19 @@
+import image from '@ohos.multimedia.image';
+import util from '@ohos.util';
+import { DecodeImageOptions } from '../interface.uts';
+export async function decodeImage(options: DecodeImageOptions) {
+  let valid = false; let width = 0; let height = 0;
+  try {
+    const bytes = new util.Base64Helper().decodeSync(options.base64);
+    const source = image.createImageSource(bytes.buffer);
+    try {
+      const info = await source.getImageInfo();
+      if (info.size.width > 0 && info.size.height > 0 && info.size.width <= options.maxDimension && info.size.height <= options.maxDimension) {
+        const pixels = await source.createPixelMap();
+        try { const decoded = await pixels.getImageInfo(); width = decoded.size.width; height = decoded.size.height; valid = width == info.size.width && height == info.size.height; }
+        finally { await pixels.release(); }
+      }
+    } finally { await source.release(); }
+  } catch (_) { valid = false; }
+  options.onResult({ valid, width, height });
+}

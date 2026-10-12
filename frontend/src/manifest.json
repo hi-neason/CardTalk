@@ -5,7 +5,38 @@
   "versionName": "0.1.0",
   "versionCode": 100,
   "transformPx": false,
-  "uniStatistics": { "enable": false },
-  "h5": { "router": { "mode": "hash" } },
-  "mp-weixin": { "appid": "", "setting": { "urlCheck": true }, "usingComponents": true }
+  "uniStatistics": {
+    "enable": false
+  },
+  "h5": {
+    "router": {
+      "mode": "hash"
+    }
+  },
+  "mp-weixin": {
+    "appid": "",
+    "setting": {
+      "urlCheck": true
+    },
+    "usingComponents": true
+  },
+  "app-plus": {
+    "usingComponents": true,
+    "nvueCompiler": "uni-app",
+    "compilerVersion": 3,
+    "modules": {
+      "Audio": {},
+      "File": {}
+    },
+    "distribute": {
+      "android": {
+        "permissions": [
+          "<uses-permission android:name=\"android.permission.INTERNET\"/>",
+          "<uses-permission android:name=\"android.permission.ACCESS_NETWORK_STATE\"/>"
+        ]
+      },
+      "ios": {}
+    }
+  },
+  "app-harmony": {}
 }

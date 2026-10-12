@@ -1,0 +1,71 @@
+import { NSObject, URL, Data, NSData, FileHandle, FileManager } from 'Foundation';
+import { DispatchQueue } from 'Dispatch';
+import { unlink } from 'Darwin';
+import { UIDocumentPickerViewController, UIDocumentPickerDelegate } from 'UIKit';
+import { UTType } from 'UniformTypeIdentifiers';
+import { DocumentOptions } from '../interface.uts';
+
+let active: DocumentOptions | null = null;
+let currentPicker: UIDocumentPickerViewController | null = null;
+let temporaryURL: URL | null = null;
+function cleanup() { if (temporaryURL != null) unlink(temporaryURL!.path); temporaryURL = null; }
+function finish(id: string, status: string, base64: string = '', message: string = '') {
+  const current = active;
+  if (current == null || current.id != id) return;
+  active = null; currentPicker = null; cleanup();
+  current.onResult({ id, status, base64, message });
+}
+class DocumentDelegate extends NSObject implements UIDocumentPickerDelegate {
+  documentPicker(controller: UIDocumentPickerViewController, @argumentLabel('didPickDocumentsAt') urls: URL[]): void {
+    if (controller != currentPicker || active == null) return;
+    const current = active!;
+    if (urls.length == 0) { finish(current.id, 'cancelled'); return; }
+    if (current.mode == 'export') { finish(current.id, 'saved'); return; }
+    const url = urls[0];
+    const scoped = url.startAccessingSecurityScopedResource();
+    const handle = new FileHandle(forReadingAtPath = url.path);
+    if (handle == null) { if (scoped) url.stopAccessingSecurityScopedResource(); finish(current.id, 'failed', '', '无法读取所选文件'); return; }
+    // Bounded read even if a provider omitted or lied about the file size.
+    const data = handle!.readData(ofLength = (current.maxBytes + 1).toInt());
+    handle!.closeFile();
+    if (scoped) url.stopAccessingSecurityScopedResource();
+    if (data.count > current.maxBytes) { finish(current.id, 'failed', '', '文件超过本机备份容量'); return; }
+    finish(current.id, 'selected', data.base64EncodedString());
+  }
+  documentPickerWasCancelled(controller: UIDocumentPickerViewController): void {
+    if (controller == currentPicker && active != null) finish(active!.id, 'cancelled');
+  }
+}
+const delegate = new DocumentDelegate();
+export function cancel(id: string) {
+  DispatchQueue.main.async(execute = (): void => {
+    if (active?.id != id) return;
+    // Export is committed by the system picker. Its native completion/cancellation
+    // callback is the only authoritative result; dismissing could race a copy.
+    if (active!.mode == 'export') return;
+    currentPicker?.dismiss(animated = true, completion = null);
+    finish(id, 'cancelled');
+  });
+}
+export function openDocument(options: DocumentOptions) {
+  DispatchQueue.main.async(execute = (): void => {
+    if (active != null) { options.onResult({ id: options.id, status: 'failed', base64: '', message: '已有文件选择窗口，请先完成或取消' }); return; }
+    active = options;
+    let picker: UIDocumentPickerViewController;
+    if (options.mode == 'export') {
+      const data = new Data(base64Encoded = options.base64);
+      if (data == null || data!.count > options.maxBytes) { finish(options.id, 'failed', '', '导出文件内容无效或超过容量'); return; }
+      const url = FileManager.default.temporaryDirectory.appendingPathComponent(options.id + '-' + options.filename);
+      temporaryURL = url;
+      if (!new NSData(data = data!).write(toFile = url.path, atomically = true)) { finish(options.id, 'failed', '', '无法准备导出文件'); return; }
+      picker = new UIDocumentPickerViewController(forExporting = [url], asCopy = true);
+    } else {
+      picker = new UIDocumentPickerViewController(forOpeningContentTypes = [UTType.json], asCopy = true);
+    }
+    picker.allowsMultipleSelection = false;
+    picker.delegate = delegate;
+    picker.isModalInPresentation = true;
+    currentPicker = picker;
+    UTSiOS.getCurrentViewController().present(picker, animated = true, completion = null);
+  });
+}

@@ -1,0 +1,58 @@
+import { NSObject } from 'Foundation';
+import { DispatchQueue } from 'Dispatch';
+import { AVSpeechSynthesizer, AVSpeechSynthesizerDelegate, AVSpeechUtterance, AVSpeechSynthesisVoice, AVSpeechBoundary } from 'AVFoundation';
+import { SpeechOptions, ListVoicesOptions, DeviceVoice } from '../interface.uts';
+
+let active: SpeechOptions | null = null;
+let currentUtterance: AVSpeechUtterance | null = null;
+function finish(utterance: AVSpeechUtterance, status: string) {
+  if (utterance != currentUtterance) return;
+  const current = active;
+  active = null; currentUtterance = null;
+  if (current != null) current.onEvent({ id: current.id, status, message: '' });
+}
+class SpeechDelegate extends NSObject implements AVSpeechSynthesizerDelegate {
+  speechSynthesizer(_synthesizer: AVSpeechSynthesizer, @argumentLabel('didStart') utterance: AVSpeechUtterance): void {
+    if (utterance == currentUtterance && active != null) active!.onEvent({ id: active!.id, status: 'started', message: '' });
+  }
+  speechSynthesizer(_synthesizer: AVSpeechSynthesizer, @argumentLabel('didFinish') utterance: AVSpeechUtterance): void { finish(utterance, 'completed'); }
+  speechSynthesizer(_synthesizer: AVSpeechSynthesizer, @argumentLabel('didCancel') utterance: AVSpeechUtterance): void { finish(utterance, 'interrupted'); }
+}
+const delegate = new SpeechDelegate();
+let synthesizer: AVSpeechSynthesizer | null = null;
+function getSynthesizer(): AVSpeechSynthesizer {
+  if (synthesizer == null) { synthesizer = new AVSpeechSynthesizer(); synthesizer!.delegate = delegate; }
+  return synthesizer!;
+}
+function stopImpl() {
+  const previous = active;
+  active = null; currentUtterance = null;
+  synthesizer?.stopSpeaking(at = AVSpeechBoundary.immediate);
+  if (previous != null) previous.onEvent({ id: previous.id, status: 'interrupted', message: '' });
+}
+function speakImpl(options: SpeechOptions) {
+  stopImpl();
+  let voice: AVSpeechSynthesisVoice | null = null;
+  if (options.voiceId.length > 0) voice = new AVSpeechSynthesisVoice(identifier = options.voiceId);
+  if (voice == null) voice = new AVSpeechSynthesisVoice(language = 'zh-CN');
+  if (voice == null) { options.onEvent({ id: options.id, status: 'unavailable', message: '设备未安装中文语音' }); return; }
+  const utterance = new AVSpeechUtterance(string = options.text);
+  utterance.voice = voice;
+  // AVSpeech uses 0.5 as the default rate, while the app presents 1.0 as normal.
+  utterance.rate = Math.max(0.1, Math.min(1.0, options.rate * 0.5)).toFloat();
+  utterance.volume = Math.max(0.0, Math.min(1.0, options.volume)).toFloat();
+  active = options; currentUtterance = utterance;
+  getSynthesizer().speak(utterance);
+}
+function listVoicesImpl(options: ListVoicesOptions) {
+  const voices: DeviceVoice[] = [];
+  AVSpeechSynthesisVoice.speechVoices().forEach((voice: AVSpeechSynthesisVoice) => {
+    if (voice.language.startsWith('zh')) voices.push({ id: voice.identifier, name: voice.name, language: voice.language });
+  });
+  options.success(voices);
+}
+export function stop() { DispatchQueue.main.async(execute = (): void => { stopImpl(); }); }
+@UTSJS.keepAlive
+export function speak(options: SpeechOptions) { DispatchQueue.main.async(execute = (): void => { speakImpl(options); }); }
+export function listVoices(options: ListVoicesOptions) { DispatchQueue.main.async(execute = (): void => { listVoicesImpl(options); }); }
+export function dispose() { DispatchQueue.main.async(execute = (): void => { stopImpl(); synthesizer = null; }); }

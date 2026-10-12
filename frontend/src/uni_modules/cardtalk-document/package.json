@@ -1,0 +1,27 @@
+{
+  "id": "cardtalk-document",
+  "displayName": "CardTalk document picker",
+  "version": "0.1.0",
+  "description": "User initiated system JSON document import and export",
+  "uni_modules": {
+    "dependencies": [],
+    "encrypt": [],
+    "platforms": {
+      "cloud": {
+        "tcb": "u",
+        "aliyun": "u"
+      },
+      "client": {
+        "Vue": {
+          "vue2": "n",
+          "vue3": "y"
+        },
+        "App": {
+          "app-android": "y",
+          "app-ios": "y",
+          "app-harmony": "y"
+        }
+      }
+    }
+  }
+}

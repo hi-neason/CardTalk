@@ -10,7 +10,11 @@ public final class Contracts {
     private Contracts() {}
     public record SpeechRequest(@NotBlank @Pattern(regexp="[A-Za-z0-9_-]{1,128}") String requestId,
                                 @NotBlank @Size(max=1100) String text, @DecimalMin("0.5") @DecimalMax("2.0") Double rate,
-                                @Pattern(regexp="neutral|happy|sad|angry|fearful") String emotion) {}
+                                @Pattern(regexp="neutral|happy|sad|angry|fearful") String emotion,
+                                @Pattern(regexp="[A-Za-z0-9_-]{1,100}") String voiceKey,
+                                @Pattern(regexp="children|adult") String audience) {
+        public SpeechRequest(String requestId,String text,Double rate,String emotion) {this(requestId,text,rate,emotion,null,null);}
+    }
     public record TrialRequest(@NotBlank @Pattern(regexp="[A-Za-z0-9_-]{8,128}") String clientId) {}
     public record Card(@NotBlank @Size(max=128) String id, @NotBlank @Size(max=80) String label,
                        @Size(max=500) String description, @Size(max=128) String personId) {}

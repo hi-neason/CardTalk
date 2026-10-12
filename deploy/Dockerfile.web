@@ -1,0 +1,13 @@
+ARG CARDTALK_IMAGE_REGISTRY=docker.io/library
+FROM ${CARDTALK_IMAGE_REGISTRY}/node:22-bookworm-slim AS build
+WORKDIR /source
+COPY package.json package-lock.json ./
+COPY frontend/package.json frontend/package.json
+RUN npm ci
+COPY frontend frontend
+COPY scripts/build-offline.mjs scripts/build-offline.mjs
+RUN npm run build
+
+FROM ${CARDTALK_IMAGE_REGISTRY}/caddy:2.10-alpine
+COPY --from=build /source/frontend/dist/build/h5 /srv
+COPY deploy/Caddyfile /etc/caddy/Caddyfile

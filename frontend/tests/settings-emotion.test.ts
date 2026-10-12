@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { CARDS, CORE_CARDS, createState, createRoom, addCard, recordRawExpression, endRoom, validateState, deriveSelectedEmotion } from '../src/domain'
+import { DEFAULT_COMMUNICATION_PREFERENCES, CARDS, CORE_CARDS, createState, createRoom, addCard, recordRawExpression, endRoom, validateState, deriveSelectedEmotion } from '../src/domain'
 import type { Card } from '../src/domain'
 const card = (id: string): Card => CARDS.find(item => item.id === id)!
 
@@ -16,7 +16,7 @@ describe('本机能力开关与旧记录迁移', () => {
     expect(result.valid).toBe(true)
     if (!result.valid) throw new Error(result.error)
     expect(result.state).not.toBe(legacy)
-    expect(result.state.settings).toEqual({ ...legacy.settings, aiExpansionEnabled: true, speechSynthesisEnabled: false, emotionRecognitionEnabled: false })
+    expect(result.state.settings).toEqual({ ...legacy.settings, preferences: { ...DEFAULT_COMMUNICATION_PREFERENCES, fontSize: legacy.settings.fontSize, rate: legacy.settings.rate }, aiExpansionEnabled: true, speechSynthesisEnabled: false, emotionRecognitionEnabled: false })
     expect(result.state.rooms).toEqual(state.rooms)
     expect(result.state.activeRoomId).toBeNull()
     expect(JSON.stringify(legacy)).toBe(original)

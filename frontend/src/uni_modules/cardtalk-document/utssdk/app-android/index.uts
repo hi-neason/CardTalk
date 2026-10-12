@@ -1,0 +1,91 @@
+import { UTSAndroid } from 'io.dcloud.uts';
+import Activity from 'android.app.Activity';
+import Intent from 'android.content.Intent';
+import Base64 from 'android.util.Base64';
+import ByteArrayOutputStream from 'java.io.ByteArrayOutputStream';
+import AtomicInteger from 'java.util.concurrent.atomic.AtomicInteger';
+import { DocumentOptions } from '../interface.uts';
+
+let active: DocumentOptions | null = null;
+let sequence: number = 0;
+// 0 = cancellable, 1 = cancelled, 2 = target write committed.
+let activePhase: AtomicInteger | null = null;
+let activeCode: Int = 0;
+let listener: ((requestCode: Int, resultCode: Int, data: Intent | null) => void) | null = null;
+function finish(id: string, status: string, base64: string = '', message: string = '') {
+  const current = active;
+  if (current == null || current.id != id) return;
+  active = null;
+  if (listener != null) UTSAndroid.offAppActivityResult(listener!);
+  listener = null;
+  current.onResult({ id, status, base64, message });
+}
+function cancelImpl(id: string) {
+  if (active?.id != id) return;
+  // Dismiss only the activity this module opened; do not navigate the host activity.
+  // Once IO owns the commit, report its eventual saved/failed result, never cancelled.
+  if (activePhase == null || !activePhase!.compareAndSet(0, 1)) return;
+  UTSAndroid.getUniActivity()?.finishActivity(activeCode);
+  finish(id, 'cancelled');
+}
+export function cancel(id: string) { UTSAndroid.getDispatcher('main').async((_value: any | null) => { cancelImpl(id); }, null); }
+export function openDocument(options: DocumentOptions) {
+  UTSAndroid.getDispatcher('main').async((_value: any | null) => {
+    if (active != null) { options.onResult({ id: options.id, status: 'failed', base64: '', message: '已有文件选择窗口，请先完成或取消' }); return; }
+    const activity = UTSAndroid.getUniActivity();
+    if (activity == null) { options.onResult({ id: options.id, status: 'failed', base64: '', message: '当前页面无法打开文件选择器' }); return; }
+    active = options; sequence = (sequence + 1) % 10000; activeCode = (18000 + sequence).toInt();
+    const phase = new AtomicInteger(0); activePhase = phase;
+    let picked = false;
+    listener = (requestCode: Int, resultCode: Int, data: Intent | null) => {
+      if (requestCode != activeCode || active?.id != options.id || picked) return;
+      picked = true;
+      if (resultCode != Activity.RESULT_OK) { finish(options.id, 'cancelled'); return; }
+      const uri = data?.getData();
+      if (uri == null) { finish(options.id, 'failed', '', '文件选择器未返回文件'); return; }
+      const resolver = activity.getContentResolver();
+      UTSAndroid.getDispatcher('io').async((_io: any | null) => {
+        try {
+          if (phase.get() == 1) return;
+          if (options.mode == 'import') {
+            const stream = resolver.openInputStream(uri);
+            if (stream == null) throw new Error('无法读取文件');
+            const output = new ByteArrayOutputStream();
+            try {
+              const buffer = ByteArray(8192);
+              let total = 0;
+              while (true) {
+                if (phase.get() == 1) return;
+                const count = stream.read(buffer);
+                if (count < 0) break;
+                total += count;
+                if (total > options.maxBytes) throw new Error('文件超过本机备份容量');
+                output.write(buffer, 0, count);
+              }
+              const encoded = Base64.encodeToString(output.toByteArray(), Base64.NO_WRAP);
+              UTSAndroid.getDispatcher('main').async((_main: any | null) => { finish(options.id, 'selected', encoded); }, null);
+            } finally { stream.close(); output.close(); }
+          } else {
+            const bytes = Base64.decode(options.base64, Base64.NO_WRAP);
+            if (bytes.size > options.maxBytes) throw new Error('文件超过导出容量');
+            // Linearization point: cancellation and touching the target compete atomically.
+            if (!phase.compareAndSet(0, 2)) return;
+            const stream = resolver.openOutputStream(uri, 'wt');
+            if (stream == null) throw new Error('无法写入文件');
+            try { stream.write(bytes); stream.flush(); }
+            finally { stream.close(); }
+            UTSAndroid.getDispatcher('main').async((_main: any | null) => { finish(options.id, 'saved'); }, null);
+          }
+        } catch (_) { UTSAndroid.getDispatcher('main').async((_main: any | null) => { finish(options.id, 'failed', '', '无法读写文件，或文件超过本机备份容量'); }, null); }
+      }, null);
+    };
+    UTSAndroid.onAppActivityResult(listener!);
+    try {
+      const intent = new Intent(options.mode == 'import' ? Intent.ACTION_OPEN_DOCUMENT : Intent.ACTION_CREATE_DOCUMENT);
+      intent.addCategory(Intent.CATEGORY_OPENABLE);
+      intent.setType('application/json');
+      if (options.mode != 'import') intent.putExtra(Intent.EXTRA_TITLE, options.filename);
+      activity.startActivityForResult(intent, activeCode);
+    } catch (_) { finish(options.id, 'failed', '', '设备无法打开文件选择器'); }
+  }, null);
+}

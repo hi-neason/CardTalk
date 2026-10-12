@@ -1,0 +1,27 @@
+import { Data, NSMutableDictionary, NSString } from 'Foundation';
+import { DispatchQueue } from 'Dispatch';
+import { CFData, CFDictionary } from 'CoreFoundation';
+import { CGImageSourceCreateWithData, CGImageSourceCreateImageAtIndex, kCGImageSourceShouldCacheImmediately, kCGImageSourceShouldCache } from 'ImageIO';
+import { DecodeImageOptions } from '../interface.uts';
+export function decodeImage(options: DecodeImageOptions) {
+  DispatchQueue.global().async(execute = (): void => {
+    let valid = false; let width = 0; let height = 0;
+    const data = new Data(base64Encoded = options.base64);
+    if (data != null) {
+      const source = CGImageSourceCreateWithData(data! as CFData, null);
+      if (source != null) {
+        // Cache immediately forces pixel decoding; a metadata-only image is insufficient.
+        const settings = new NSMutableDictionary();
+        settings.setObject(true, forKey = kCGImageSourceShouldCacheImmediately as NSString);
+        settings.setObject(true, forKey = kCGImageSourceShouldCache as NSString);
+        const decoded = CGImageSourceCreateImageAtIndex(source!, 0, settings as CFDictionary);
+        if (decoded != null) {
+          width = Number(decoded!.width); height = Number(decoded!.height);
+          valid = width > 0 && height > 0 && width <= options.maxDimension && height <= options.maxDimension;
+        }
+      }
+    }
+    // ImageIO/CGImage/Data objects are ARC managed and leave scope after the callback.
+    DispatchQueue.main.async(execute = (): void => { options.onResult({ valid, width, height }); });
+  });
+}

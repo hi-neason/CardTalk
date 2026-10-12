@@ -246,6 +246,25 @@ class ApiTest {
         assertFalse(scenes.session(stoken).capabilities().get("analytics"));
         assertEquals(2,calls.get());
     }
+    @Test void analyticsCapabilityIsIndependentAndRefreshesExistingSession() throws Exception {
+        var disabled=capabilities(false,false,false);
+        String token=disabled.create("analytics-client").token();
+        var input=localInput("before-analytics",null,null,List.of(new Card("apple","苹果",null,null)));
+        disabled.expand(token,input);
+        var enabled=new TrialService(mapper,gateway,directory.resolve("state.json").toString(),2,false,false,false,true);
+        assertEquals(Map.of("profileManagement",false,"scenarioManagement",false,"customCards",false,"analytics",true),enabled.session(token).capabilities());
+        assertEquals(1,enabled.session(token).remaining());
+        assertEquals("REQUEST_ALREADY_COMPLETED",assertThrows(ApiException.class,()->enabled.expand(token,input)).code);
+        var endpoint=MockMvcBuilders.standaloneSetup(new ApiController(enabled,gateway,new SpeechGateway(mapper,"","","","","",1,"super-smart","")))
+            .setControllerAdvice(new Errors()).build();
+        endpoint.perform(get("/api/v1/trial-session").header("Authorization","Bearer "+token))
+            .andExpect(status().isOk()).andExpect(jsonPath("$.capabilities.analytics").value(true));
+        endpoint.perform(post("/api/v1/trial-session").contentType("application/json").content("{\"clientId\":\"analytics-new-client\"}"))
+            .andExpect(status().isOk()).andExpect(jsonPath("$.capabilities.analytics").value(true));
+        var restarted=capabilities(false,false,false);
+        assertFalse(restarted.session(token).capabilities().get("analytics"));
+        assertEquals(1,calls.get());
+    }
     @Test void customCardGateDoesNotBlockCoreCards() throws Exception {
         var restricted=capabilities(false,false,false);
         String token=restricted.create("core-only-client").token();

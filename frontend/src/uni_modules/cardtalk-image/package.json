@@ -1,0 +1,27 @@
+{
+  "id": "cardtalk-image",
+  "displayName": "CardTalk image decoder",
+  "version": "0.1.0",
+  "description": "Decode user selected local image pixels before persistence",
+  "uni_modules": {
+    "dependencies": [],
+    "encrypt": [],
+    "platforms": {
+      "cloud": {
+        "tcb": "u",
+        "aliyun": "u"
+      },
+      "client": {
+        "Vue": {
+          "vue2": "n",
+          "vue3": "y"
+        },
+        "App": {
+          "app-android": "y",
+          "app-ios": "y",
+          "app-harmony": "y"
+        }
+      }
+    }
+  }
+}

@@ -13,7 +13,10 @@
     "typecheck": "npm run typecheck --workspace frontend",
     "test": "npm run test --workspace frontend",
     "test:backend": "mvn -f backend/pom.xml test",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "build:android": "npm run build:app:android --workspace frontend",
+    "build:ios": "npm run build:app:ios --workspace frontend",
+    "build:harmony": "npm run build:app-harmony --workspace frontend"
   },
   "engines": {
     "node": ">=22",

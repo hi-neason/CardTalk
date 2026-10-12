@@ -1,0 +1,16 @@
+**/node_modules
+**/target
+**/dist
+.git
+.cardtalk
+.omx
+**/.env
+**/*.env
+**/.env.local
+**/.env.*.local
+backend/data
+data
+test-results
+playwright-report
+deploy/config
+*.log

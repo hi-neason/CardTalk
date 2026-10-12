@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { createState, createRoom, endRoom, addCard, recordRawExpression, getActiveRoom, validateState, CARDS, createFamilyProfile, updateFamilyProfile, archiveFamilyProfile, createCustomCard, updateCustomCard, archiveCustomCard, createCustomScene, updateCustomScene, archiveCustomScene, getAvailableCards, getAvailableProfiles, getAvailableScenes, getRecommendedCards, buildRoomContext, cardImageInfo, MAX_CARD_IMAGE_BYTES, deriveSelectedEmotion } from '../src/domain'
+import { createState, createRoom, endRoom, addCard, recordRawExpression, getActiveRoom, validateState, CARDS, createFamilyProfile, updateFamilyProfile, archiveFamilyProfile, createCustomCard, updateCustomCard, archiveCustomCard, createCustomScene, updateCustomScene, archiveCustomScene, getAvailableCards, getAvailableProfiles, getAvailableScenes, getRecommendedCards, buildRoomContext, cardImageInfo, deriveSelectedEmotion } from '../src/domain'
 import type { Context } from '../src/domain'
 const context: Context = { preset: 'children', sceneId: 'kitchen', participants: [], communicatorName: '体验者', source: 'independent' }
 const png = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII='
@@ -30,12 +30,13 @@ describe('家庭管理及历史快照', () => {
     for (let i = 1; i < 50; i++) state = createFamilyProfile(state, { name: `成员${i}`, preset: 'adult' })
     expect(() => createFamilyProfile(state, { name: '第51位', preset: 'adult' })).toThrow('50')
   })
-  it('图片限格式、字节和实际头部尺寸，图片总量不超2MiB', () => {
+  it('图片限格式和实际头部尺寸，允许超过200KB，图片总量不超2MiB', () => {
     expect(cardImageInfo(png)).toMatchObject({ width: 1, height: 1 })
-    for (const image of ['https://example.com/photo.png', 'data:image/svg+xml;base64,PHN2Zy8+', 'data:image/png;base64,YmFk', headerImage(MAX_CARD_IMAGE_BYTES + 1), headerImage(100, 1025), headerImage(100, 1, 0)]) expect(cardImageInfo(image)).toBeNull()
+    expect(cardImageInfo(headerImage(TEST_IMAGE_BYTES + 1))).toMatchObject({ bytes: TEST_IMAGE_BYTES + 1 })
+    for (const image of ['https://example.com/photo.png', 'data:image/svg+xml;base64,PHN2Zy8+', 'data:image/png;base64,YmFk', headerImage(100, 1025), headerImage(100, 1, 0)]) expect(cardImageInfo(image)).toBeNull()
     let state = createState()
-    for (let i = 0; i < 10; i++) state = createCustomCard(state, { label: `照片${i}`, category: 'daily', image: headerImage(MAX_CARD_IMAGE_BYTES) })
-    expect(() => createCustomCard(state, { label: '超出总图片额度', category: 'daily', image: headerImage(MAX_CARD_IMAGE_BYTES) })).toThrow()
+    for (let i = 0; i < 10; i++) state = createCustomCard(state, { label: `照片${i}`, category: 'daily', image: headerImage(TEST_IMAGE_BYTES) })
+    expect(() => createCustomCard(state, { label: '超出总图片额度', category: 'daily', image: headerImage(TEST_IMAGE_BYTES) })).toThrow()
     const id = state.family.cards[0]!.id
     state = updateCustomCard(state, id, { image: '' }); expect(state.family.cards[0]!.image).toBeUndefined()
     expect(() => createCustomCard(state, { label: '格式错误', category: 'daily', image: 'data:image/png;base64,YmFk' })).toThrow()
@@ -124,7 +125,7 @@ describe('家庭管理及历史快照', () => {
     expect(() => createCustomScene(state, { name: '超限场景', description: '描述' })).toThrow('50')
   })
   it('图片快照累计超过本机容量时拒绝变更，保留先前可保存的状态', () => {
-    let state = createCustomCard(createState(), { label: '大照片', category: 'daily', image: headerImage(MAX_CARD_IMAGE_BYTES) })
+    let state = createCustomCard(createState(), { label: '大照片', category: 'daily', image: headerImage(TEST_IMAGE_BYTES) })
     const card = state.family.cards[0]!
     state = createRoom(state, context)
     let rejected = false
@@ -149,4 +150,64 @@ describe('家庭管理及历史快照', () => {
     if (loaded.valid) expect(loaded.state.rooms[0]!.turns[0]!.cardSnapshot[0]!.image).toBe(png)
   })
 
+  it('使用人与场景图片持久化，移除资料图片不修改会话或历史快照', () => {
+    let state = createFamilyProfile(createState(), { name: '图片使用人', preset: 'adult', image: png })
+    state = createCustomScene(state, { name: '图片场景', description: '熟悉的地方', image: png })
+    const profileId = state.family.profiles[0]!.id, sceneId = state.family.scenes[0]!.id
+    expect(getAvailableScenes(state).find(scene => scene.id === sceneId)?.image).toBe(png)
+    state = createRoom(state, { ...context, profileId, sceneId })
+    state = recordRawExpression(addCard(state, CARDS[0]!))
+    const originalRoom = JSON.stringify(state.rooms[0])
+    expect(getActiveRoom(state)!.context.profileSnapshot?.image).toBe(png)
+    expect(getActiveRoom(state)!.context.sceneSnapshot?.image).toBe(png)
+    expect(getActiveRoom(state)!.turns[0]!.contextSnapshot.profileSnapshot?.image).toBe(png)
+    expect(getActiveRoom(state)!.turns[0]!.contextSnapshot.sceneSnapshot?.image).toBe(png)
+    const restored = validateState(JSON.parse(JSON.stringify(state)))
+    expect(restored.valid).toBe(true)
+    if (!restored.valid) throw new Error(restored.error)
+    state = updateFamilyProfile(restored.state, profileId, { image: '' })
+    state = updateCustomScene(state, sceneId, { image: '' })
+    expect(state.family.profiles[0]).not.toHaveProperty('image')
+    expect(state.family.scenes[0]).not.toHaveProperty('image')
+    expect(JSON.stringify(state.rooms[0])).toBe(originalRoom)
+    state = endRoom(state); state = createRoom(state, { ...context, profileId, sceneId })
+    expect(getActiveRoom(state)!.context.profileSnapshot).not.toHaveProperty('image')
+    expect(getActiveRoom(state)!.context.sceneSnapshot).not.toHaveProperty('image')
+    expect(validateState(JSON.parse(JSON.stringify(state))).valid).toBe(true)
+  })
+  it('旧无图片资料和创建空图片仍有效，资料及快照拒绝不支持的图片', () => {
+    let state = createFamilyProfile(createState(), { name: '旧使用人', preset: 'children', image: '' })
+    state = createCustomScene(state, { name: '旧场景', description: '无图片', image: '' })
+    expect(state.family.profiles[0]).not.toHaveProperty('image')
+    expect(state.family.scenes[0]).not.toHaveProperty('image')
+    expect(validateState(JSON.parse(JSON.stringify(state))).valid).toBe(true)
+    const invalidImage = 'data:image/svg+xml;base64,PHN2Zy8+'
+    expect(() => updateFamilyProfile(state, state.family.profiles[0]!.id, { image: invalidImage })).toThrow()
+    expect(() => updateCustomScene(state, state.family.scenes[0]!.id, { image: invalidImage })).toThrow()
+    expect(() => createFamilyProfile(state, { name: '损坏照片人', preset: 'adult', image: headerImage(100, 2048) })).toThrow()
+    expect(() => createCustomScene(state, { name: '损坏照片场景', description: '描述', image: 'data:image/png;base64,YmFk' })).toThrow()
+    state = createRoom(state, { ...context, profileId: state.family.profiles[0]!.id, sceneId: state.family.scenes[0]!.id })
+    for (const field of ['profileSnapshot', 'sceneSnapshot'] as const) {
+      const corrupt = JSON.parse(JSON.stringify(state))
+      corrupt.rooms[0].context[field].image = invalidImage
+      expect(validateState(corrupt).valid).toBe(false)
+    }
+  })
+  it('家庭图片2MiB额度由使用人、卡片、场景共享', () => {
+    const large = headerImage(TEST_IMAGE_BYTES)
+    let state = createFamilyProfile(createState(), { name: '照片使用人', preset: 'adult', image: large })
+    state = createCustomScene(state, { name: '照片场景', description: '描述', image: large })
+    for (let i = 0; i < 8; i++) state = createCustomCard(state, { label: `共享图片${i}`, category: 'daily', image: large })
+    const before = JSON.stringify(state)
+    expect(() => createFamilyProfile(state, { name: '超额使用人', preset: 'adult', image: large })).toThrow()
+    expect(() => createCustomScene(state, { name: '超额场景', description: '描述', image: large })).toThrow()
+    expect(() => createCustomCard(state, { label: '超额卡片', category: 'daily', image: large })).toThrow()
+    expect(JSON.stringify(state)).toBe(before)
+    state = updateFamilyProfile(state, state.family.profiles[0]!.id, { image: '' })
+    state = createCustomScene(state, { name: '释放额度后的场景', description: '描述', image: large })
+    expect(validateState(state).valid).toBe(true)
+  })
+
 })
+
+const TEST_IMAGE_BYTES = 200 * 1024

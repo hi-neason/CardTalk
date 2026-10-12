@@ -1,0 +1,18 @@
+{$CARDTALK_DOMAIN} {
+    encode zstd gzip
+    header {
+        X-Content-Type-Options nosniff
+        Referrer-Policy same-origin
+        Permissions-Policy "camera=(), microphone=(), geolocation=()"
+    }
+    handle /api/* {
+        reverse_proxy api:8080
+    }
+    handle {
+        root * /srv
+        @worker path /sw.js /manifest.webmanifest
+        header @worker Cache-Control "no-cache"
+        try_files {path} /index.html
+        file_server
+    }
+}

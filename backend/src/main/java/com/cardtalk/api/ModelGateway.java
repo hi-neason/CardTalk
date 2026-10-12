@@ -3,6 +3,7 @@ package com.cardtalk.api;
 import com.fasterxml.jackson.databind.*;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
+import com.cardtalk.operationsmetrics.MetricsRegistry;
 import java.net.URI;
 import java.net.http.*;
 import java.time.Duration;
@@ -12,6 +13,9 @@ import static com.cardtalk.api.Contracts.*;
 
 @Component
 public class ModelGateway {
+    private MetricsRegistry metrics;
+    @org.springframework.beans.factory.annotation.Autowired
+    public void setMetrics(MetricsRegistry metrics) { this.metrics=metrics; }
     public static final String PROMPT_VERSION="aac-2026-10-12-v3";
     private final ObjectMapper mapper;
     private final String baseUrl, model, key;
@@ -41,6 +45,7 @@ public class ModelGateway {
     public Result expand(ExpansionRequest input) {
         Context context=validatedContext(input);
         if(!configured()) throw new ApiException(503,"LLM_NOT_CONFIGURED","尚未配置表达服务，可继续使用原始卡片");
+        MetricsRegistry.Call metric=null;
         try {
             var body=new LinkedHashMap<String,Object>(Map.of("model",model,"temperature",0.3,"max_tokens",700,"messages",List.of(
                 Map.of("role","system","content",SYSTEM),
@@ -49,11 +54,13 @@ public class ModelGateway {
             var request=HttpRequest.newBuilder(URI.create(baseUrl.replaceAll("/+$","")+"/chat/completions"))
                 .timeout(timeout).header("Content-Type","application/json").header("Authorization","Bearer "+key)
                 .POST(HttpRequest.BodyPublishers.ofString(mapper.writeValueAsString(body))).build();
+            metric=MetricsRegistry.provider(metrics,MetricsRegistry.Provider.expansion_llm);
             var response=client.send(request,info->new BoundedBody(100_000));
             if(response.statusCode()<200 || response.statusCode()>=300)
                 throw new ApiException(502,"LLM_UPSTREAM_ERROR","表达服务暂时不可用，请稍后重试");
             if(response.body().length>100_000) throw invalid();
             var envelope=mapper.readTree(response.body());
+            if(envelope!=null)metric.usage(envelope.path("usage"));
             var content=envelope.path("choices").path(0).path("message").path("content");
             if(!content.isTextual()) throw invalid();
             String json=content.asText().strip();
@@ -73,11 +80,13 @@ public class ModelGateway {
             var clarification=result.path("clarification");
             if(!clarification.isTextual() || clarification.asText().length()>200) throw invalid();
             if(result.path("needsClarification").asBoolean() && clarification.asText().isBlank()) throw invalid();
+            metric.success();
             return new Result(List.copyOf(list),result.path("needsClarification").asBoolean(),clarification.asText());
         } catch(HttpTimeoutException ex) { throw new ApiException(504,"LLM_TIMEOUT","表达生成超时，请重试");
         } catch(InterruptedException ex) { Thread.currentThread().interrupt(); throw new ApiException(503,"LLM_INTERRUPTED","表达请求已中断");
         } catch(ApiException ex) { throw ex;
         } catch(IOException | IllegalArgumentException ex) { throw new ApiException(502,"LLM_INVALID_RESPONSE","表达服务响应不可用，请重试"); }
+        finally { if(metric!=null)metric.close(); }
     }
     private static Context validatedContext(ExpansionRequest input) {
         Context context=input.context();

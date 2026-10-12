@@ -1,0 +1,55 @@
+import { textToSpeech } from '@kit.CoreSpeechKit';
+import { SpeechOptions, ListVoicesOptions } from '../interface.uts';
+
+let engine: textToSpeech.TextToSpeechEngine | null = null;
+let active: SpeechOptions | null = null;
+let generation: number = 0;
+function finish(id: string, status: string, message: string = '') {
+  const current = active;
+  if (current == null || current.id != id) return;
+  active = null;
+  current.onEvent({ id, status, message });
+}
+export function stop() {
+  generation++;
+  const current = active;
+  active = null;
+  engine?.stop();
+  if (current != null) current.onEvent({ id: current.id, status: 'interrupted', message: '' });
+}
+@UTSJS.keepAlive
+export function speak(options: SpeechOptions) {
+  stop(); active = options;
+  const token = generation;
+  const begin = () => {
+    if (token != generation || active?.id != options.id) return;
+    try {
+      engine!.speak(options.text, { requestId: options.id, extraParams: { speed: Math.max(0.5, Math.min(2.0, options.rate)), volume: Math.max(0.0, Math.min(1.0, options.volume)), playType: 1, queueMode: 1 } });
+    } catch (_) { finish(options.id, 'failed', '设备朗读失败'); }
+  };
+  if (engine != null) { begin(); return; }
+  // Harmony documents online=1 as the offline synthesis mode.
+  textToSpeech.createEngine({ language: 'zh-CN', person: 0, online: 1 }).then((created: textToSpeech.TextToSpeechEngine) => {
+    if (token != generation) { created.shutdown(); return; }
+    engine = created;
+    created.setListener({
+      onStart: (id: string, _response: textToSpeech.StartResponse) => {
+        if (active?.id == id) active!.onEvent({ id, status: 'started', message: '' });
+      },
+      onStop: (id: string, _response: textToSpeech.StopResponse) => { finish(id, 'interrupted'); },
+      onComplete: (id: string, response: textToSpeech.CompleteResponse) => { if (response.type == 1) finish(id, 'completed'); },
+      onError: (id: string, _code: number, _message: string) => { finish(id, 'failed', '设备朗读失败'); }
+    });
+    begin();
+  }).catch(() => { if (token == generation) finish(options.id, 'unavailable', '设备未提供中文离线语音'); });
+}
+export function listVoices(options: ListVoicesOptions) {
+  textToSpeech.createEngine({ language: 'zh-CN', person: 0, online: 1 }).then((probe: textToSpeech.TextToSpeechEngine) => {
+    probe.shutdown();
+    options.success([{ id: 'zh-CN-offline', name: '系统中文离线语音', language: 'zh-CN' }]);
+  }).catch(() => { options.fail('设备未提供中文离线语音'); });
+}
+export function dispose() { stop(); engine?.shutdown(); engine = null; }
+
+/** Host sandbox path; no guessed path or dependency on private JS runtime exports. */
+export function getTemporaryDirectory(): string { return getContext().cacheDir; }

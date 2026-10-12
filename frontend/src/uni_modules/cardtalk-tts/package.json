@@ -1,0 +1,27 @@
+{
+  "id": "cardtalk-tts",
+  "displayName": "CardTalk device speech",
+  "version": "0.1.0",
+  "description": "On-device system speech with explicit lifecycle events",
+  "uni_modules": {
+    "dependencies": [],
+    "encrypt": [],
+    "platforms": {
+      "cloud": {
+        "tcb": "u",
+        "aliyun": "u"
+      },
+      "client": {
+        "Vue": {
+          "vue2": "n",
+          "vue3": "y"
+        },
+        "App": {
+          "app-android": "y",
+          "app-ios": "y",
+          "app-harmony": "y"
+        }
+      }
+    }
+  }
+}
