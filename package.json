@@ -1,0 +1,37 @@
+{
+  "name": "cardtalk",
+  "version": "0.1.0",
+  "private": true,
+  "workspaces": [
+    "frontend"
+  ],
+  "scripts": {
+    "dev": "npm run dev:h5 --workspace frontend",
+    "dev:backend": "node scripts/run-backend.mjs",
+    "build": "npm run build:h5 --workspace frontend",
+    "build:weixin": "npm run build:mp-weixin --workspace frontend",
+    "typecheck": "npm run typecheck --workspace frontend",
+    "test": "npm run test --workspace frontend",
+    "test:backend": "mvn -f backend/pom.xml test",
+    "test:e2e": "playwright test"
+  },
+  "engines": {
+    "node": ">=22",
+    "npm": ">=10"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.56.1"
+  },
+  "overrides": {
+    "@dcloudio/vite-plugin-uni": {
+      "vite": "5.4.21"
+    },
+    "@dcloudio/uni-h5-vite": {
+      "vite": "5.4.21"
+    },
+    "vitest": {
+      "vite": "6.4.3"
+    }
+  },
+  "packageManager": "npm@10.9.4"
+}

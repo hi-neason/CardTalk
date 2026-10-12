@@ -1,0 +1,4 @@
+{
+  "pages": [{ "path": "pages/index/index", "style": { "navigationStyle": "custom", "navigationBarTitleText": "CardTalk 家庭沟通" } }],
+  "globalStyle": { "navigationBarTextStyle": "black", "navigationBarBackgroundColor": "#f5f7fb", "backgroundColor": "#f5f7fb" }
+}

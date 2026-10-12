@@ -1,0 +1,11 @@
+{
+  "name": "CardTalk",
+  "appid": "",
+  "description": "家庭辅助沟通",
+  "versionName": "0.1.0",
+  "versionCode": 100,
+  "transformPx": false,
+  "uniStatistics": { "enable": false },
+  "h5": { "router": { "mode": "hash" } },
+  "mp-weixin": { "appid": "", "setting": { "urlCheck": true }, "usingComponents": true }
+}

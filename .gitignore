@@ -1,0 +1,14 @@
+node_modules/
+.DS_Store
+test-results/
+dist/
+target/
+.env
+.env.local
+.env.*.local
+*.log
+.cardtalk/
+backend/data/
+data/
+.omx/
+playwright-report/
