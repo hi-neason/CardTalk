@@ -62,6 +62,7 @@ for (const exit of ['停止试听', '关闭'] as const) {
     await expect.poll(() => requested).toBe(true)
     expect(calls.speech).toHaveLength(0)
     await button(page, exit).click()
+    if(exit==='停止试听')await expect(page.getByText('试听已停止',{exact:true})).toBeVisible()
     const response = page.waitForResponse('**/api/v1/trial-session')
     release(); await response
     await page.waitForTimeout(150)

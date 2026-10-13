@@ -11,6 +11,11 @@ export interface DeviceSpeechOptions { volume?: number; deviceVoiceURI?: string;
 type Update = (status: PlaybackStatus, message?: string) => void;
 let stopCurrent: (() => void) | null = null;
 let sequence = 0;
+// Host cleanup may throw after a player has already been released. Always report
+// the terminal status and attempt the remaining cleanup operations.
+function cleanupPlayback(...actions: (() => void)[]) {
+  for (const action of actions) { try { action(); } catch { /* Best-effort host cleanup. */ } }
+}
 export function stopSpeech() { sequence++; const stop = stopCurrent; stopCurrent = null; stop?.(); }
 
 export function playCardAudio(cards: Card[], update: Update, rate = 0.9, options: DeviceSpeechOptions = {}) {
@@ -30,17 +35,29 @@ export function playCardAudio(cards: Card[], update: Update, rate = 0.9, options
   const audio = uni.createInnerAudioContext();
   audio.volume = options.volume ?? 1; audio.playbackRate = rate;
   let index = 0, started = false, settled = false;
-  const dispose = () => { audio.destroy(); if (current === sequence) stopCurrent = null; };
-  stopCurrent = () => { if (!settled) { settled = true; audio.stop(); update('interrupted'); dispose(); } };
-  audio.onPlay(() => { if (!started && current === sequence) { started = true; update('started'); } });
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const dispose = () => { clearTimeout(timer); if (current === sequence) stopCurrent = null; cleanupPlayback(() => audio.destroy()); };
+  stopCurrent = () => { if (!settled) { settled = true; cleanupPlayback(() => audio.stop()); dispose(); update('interrupted'); } };
+  audio.onPlay(() => {
+    if (settled || current !== sequence) return;
+    clearTimeout(timer);
+    timer = setTimeout(() => fail('固定词语音频未返回播放完成状态，请重试或展示文字。'), 120000);
+    if (!started) { started = true; update('started'); }
+  });
   audio.onEnded(() => {
     if (settled || current !== sequence) return;
     index++;
-    if (index === cards.length) { settled = true; update('completed'); dispose(); }
+    if (index === cards.length) { settled = true; dispose(); update('completed'); }
     else play();
   });
-  audio.onError(() => { if (!settled && current === sequence) { settled = true; update('failed', '固定词语音频暂时无法播放，原始卡片和文字仍可展示。'); dispose(); } });
-  function play() { audio.src = `/static/audio/${cards[index]!.id}.m4a`; audio.play(); }
+  function fail(message: string) { if (!settled && current === sequence) { settled = true; dispose(); update('failed', message); } }
+  audio.onError(() => fail('固定词语音频暂时无法播放，原始卡片和文字仍可展示。'));
+  function play() {
+    clearTimeout(timer);
+    timer = setTimeout(() => fail('固定词语音频没有开始播放，请重试或展示文字。'), 10000);
+    try { audio.src = `/static/audio/${cards[index]!.id}.m4a`; audio.play(); }
+    catch { fail('固定词语音频暂时无法播放，原始卡片和文字仍可展示。'); }
+  }
   if (!cards.length) { settled = true; dispose(); update('unavailable'); return; }
   play();
 }
@@ -55,14 +72,27 @@ export async function speakText(text: string, rate: number, update: Update, useR
     utterance.lang = 'zh-CN'; utterance.rate = rate; utterance.volume = options.volume ?? 1;
     const voice = synth.getVoices().find(v => v.voiceURI === options.deviceVoiceURI && /^zh|^cmn|^yue/i.test(v.lang)) || synth.getVoices().find(v => /zh[-_]CN/i.test(v.lang) && v.localService) || synth.getVoices().find(v => /^zh/i.test(v.lang));
     if (voice) utterance.voice = voice;
-    let settled = false;
-    const timer = setTimeout(() => { if (!settled && current === sequence) { settled = true; synth.cancel(); update('failed', '设备没有开始朗读，请检查中文语音与音量，或使用文字展示。'); stopCurrent = null; } }, 10000);
-    const finish = (status: PlaybackStatus, message?: string) => { if (settled || current !== sequence) return; settled = true; clearTimeout(timer); stopCurrent = null; update(status, message); };
-    utterance.onstart = () => { clearTimeout(timer); if (current === sequence) update('started'); };
+    let settled = false, started = false;
+    let timer: ReturnType<typeof setTimeout>;
+    const finish = (status: PlaybackStatus, message?: string, cancel = false) => {
+      if (settled || current !== sequence) return;
+      settled = true; clearTimeout(timer); stopCurrent = null;
+      if (cancel) cleanupPlayback(() => synth.cancel());
+      update(status, message);
+    };
+    timer = setTimeout(() => finish('failed', '设备没有开始朗读，请检查中文语音与音量，或使用文字展示。', true), 10000);
+    utterance.onstart = () => {
+      if (settled || started || current !== sequence) return;
+      started = true; clearTimeout(timer);
+      timer = setTimeout(() => finish('failed', '设备未返回朗读完成状态，请重试或展示文字。', true), Math.max(120000, text.length * 2000));
+      update('started');
+    };
     utterance.onend = () => finish('completed');
     utterance.onerror = () => finish('failed', '设备朗读失败，已确认的表达仍可展示。');
-    stopCurrent = () => { if (!settled) { settled = true; clearTimeout(timer); synth.cancel(); update('interrupted'); } };
-    synth.cancel(); synth.speak(utterance); return;
+    stopCurrent = () => { if (!settled) { settled = true; clearTimeout(timer); cleanupPlayback(() => synth.cancel()); update('interrupted'); } };
+    try { synth.cancel(); synth.speak(utterance); }
+    catch { finish('failed', '设备朗读失败，已确认的表达仍可展示。', true); }
+    return;
   }
   // #endif
   // #ifdef APP
@@ -76,8 +106,9 @@ export async function speakText(text: string, rate: number, update: Update, useR
   let audio: UniApp.InnerAudioContext | null = null;
   let cleanup = () => {};
   let settled = false;
-  const finish = (status: PlaybackStatus, message?: string) => { if (settled || current !== sequence) return; settled = true; stopCurrent = null; audio?.destroy(); cleanup(); update(status, message); };
-  stopCurrent = () => { call.cancel(); if (!settled) { settled = true; audio?.stop(); audio?.destroy(); cleanup(); update('interrupted'); } };
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const finish = (status: PlaybackStatus, message?: string) => { if (settled || current !== sequence) return; settled = true; clearTimeout(timer); stopCurrent = null; cleanupPlayback(() => audio?.destroy(), cleanup); update(status, message); };
+  stopCurrent = () => { if (!settled) { settled = true; clearTimeout(timer); cleanupPlayback(() => call.cancel(), () => audio?.stop(), () => audio?.destroy(), cleanup); update('interrupted'); } };
   try {
     const bytes = await call.promise;
     if (current !== sequence || settled) return;
@@ -99,9 +130,14 @@ export async function speakText(text: string, rate: number, update: Update, useR
     // #endif
     if (!src) { finish('unavailable', '当前端尚未接入新句子语音播放。'); return; }
     audio = uni.createInnerAudioContext(); audio.volume = options.volume ?? 1; audio.src = src;
-    audio.onPlay(() => { if (current === sequence && !settled) update('started'); });
+    audio.onPlay(() => { if (current === sequence && !settled) {
+      clearTimeout(timer);
+      timer = setTimeout(() => finish('failed', '语音未返回播放完成状态，请重试或展示文字。'), Math.max(120000, text.length * 2000));
+      update('started');
+    } });
     audio.onEnded(() => finish('completed'));
     audio.onError(() => finish('failed', '语音播放失败，请检查声音设置。'));
+    timer = setTimeout(() => finish('failed', '语音没有开始播放，请重试或展示文字。'), 10000);
     audio.play();
   } catch (error) { finish('failed', error instanceof Error ? error.message : '语音合成失败'); }
 }

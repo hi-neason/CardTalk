@@ -23,3 +23,19 @@ test('删除时本机主数据写入失败，回滚已清的同步队列并保�
   await button(page, '清空全部本机产品数据').click(); await page.locator('.uni-modal__btn_primary').click(); await expect(page.locator('.local-data-manager [role=alert]')).toContainText('未清空');
   expect(await page.evaluate(key => JSON.parse(localStorage.getItem(key)!), stateKey)).toEqual(state); expect(await page.evaluate(key => JSON.parse(localStorage.getItem(key)!), queueKey)).toEqual(queue);
 });
+
+
+test('清空确认绑定当时资料，确认期间设置变化不得清空新状态', async ({page}) => {
+ const {queue}=await setup(page);
+ await button(page,'清空全部本机产品数据').click();
+ await page.getByRole('button',{name:'朗读速度 1.2 倍',exact:true}).dispatchEvent('click');
+ const changed=await page.evaluate(key=>JSON.parse(localStorage.getItem(key)!),stateKey);
+ expect(changed.settings.preferences.rate).toBe(1.2);
+ await page.locator('.uni-modal__btn_primary').click();
+ await expect(page.locator('.local-data-manager [role=alert]')).toContainText('资料已变化');
+ expect(await page.evaluate(key=>JSON.parse(localStorage.getItem(key)!),stateKey)).toEqual(changed);
+ expect(await page.evaluate(key=>JSON.parse(localStorage.getItem(key)!),queueKey)).toEqual(queue);
+ await button(page,'清空全部本机产品数据').click();
+ await page.locator('.uni-modal__btn_primary').click();
+ await expect(page.getByText('本机产品数据已清空。',{exact:true})).toBeVisible();
+});
